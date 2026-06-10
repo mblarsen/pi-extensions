@@ -6,7 +6,7 @@ Provides the `/fux` slash command and the `fux_fork` LLM tool. Merge and delete 
 
 ## Demo
 
-[![demo](demo.png)](https://asciinema.org/a/Mq5008rXo0mXJoio)
+[![demo](demo.gif)](https://asciinema.org/a/Mq5008rXo0mXJoio)
 
 ## Install
 
