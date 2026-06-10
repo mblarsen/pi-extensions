@@ -4,6 +4,10 @@ Fork a Pi session into a side tmux pane for tangential exploration, then merge c
 
 Provides the `/fux` slash command and the `fux_fork` LLM tool. Merge and delete remain slash-command-only for safety.
 
+## Demo
+
+[![asciicast](https://asciinema.org/a/Mq5008rXo0mXJoio.svg)](https://asciinema.org/a/Mq5008rXo0mXJoio)
+
 ## Install
 
 ```bash
