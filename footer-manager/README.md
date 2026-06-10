@@ -2,6 +2,10 @@
 
 Manage the Pi status footer — toggle built-in items, reorder extension statuses, and enter a minimal "zen" mode.
 
+## Demo
+
+[![demo](demo.gif)](https://asciinema.org/a/yoXyJEt2NjBhK8w2)
+
 ## Install
 
 ```bash
