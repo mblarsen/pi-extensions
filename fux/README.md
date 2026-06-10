@@ -1,6 +1,6 @@
 # fux
 
-Fork a Pi session into a side tmux pane for tangential exploration, then merge changes back.
+Adds a leaf node to the session tree, forks Pi into a parallel pane, then grafts the fork back at the marked leaf — like a git branch and merge, but for your conversation history.
 
 Provides the `/fux` slash command and the `fux_fork` LLM tool. Merge and delete remain slash-command-only for safety.
 
