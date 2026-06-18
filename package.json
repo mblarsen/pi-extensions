@@ -7,12 +7,14 @@
   "keywords": [
     "pi-package"
   ],
+  "type": "module",
   "pi": {
     "extensions": [
       "./continue-from/index.ts",
       "./fux/index.ts",
       "./footer-manager/index.ts",
-      "./update-changelog/index.ts"
+      "./update-changelog/index.ts",
+      "./follow-ups/index.ts"
     ],
     "skills": [
       "./fux/fux-skill/SKILL.md"
@@ -27,6 +29,7 @@
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.79.0",
     "@earendil-works/pi-coding-agent": "^0.79.0",
-    "@earendil-works/pi-tui": "^0.79.0"
+    "@earendil-works/pi-tui": "^0.79.0",
+    "typescript": "^6.0.3"
   }
 }
