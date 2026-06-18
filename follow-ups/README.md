@@ -37,13 +37,14 @@ Follow-ups are stored in `.pi/follow-ups.jsonl` at the project root.
 | Key | Action |
 |---|---|
 | `enter` | Pop selected follow-up into the chat input and mark it done. |
+| `p` | Preview the anchored assistant message in a scrollable window. |
 | `e` | Edit selected follow-up. |
 | `ctrl-d` | Delete selected follow-up with confirmation. |
 | `u` / `d` | Move selected follow-up up or down. |
 | `tab` | Toggle between current-session and whole-project scope. |
 | `n` | Create a new follow-up using the selected item’s anchor. |
 | `j` / `k`, arrows | Navigate. |
-| `q`, `escape`, `ctrl-c` | Close the list. |
+| `q`, `escape`, `ctrl-c` | Close the list, or close preview mode when previewing. |
 
 Done follow-ups stay in the list, move below active items, and are dimmed.
 
@@ -57,5 +58,8 @@ Each follow-up stores:
 - Pi tree node ID
 - worktree/project root
 - snippet of the anchored assistant message
+- full anchored assistant text for previewing
 
 The anchor search walks backward through the current session branch and skips empty or aborted assistant entries.
+
+In preview mode, use `j`/`k` or arrows to scroll and `p`/`q`/`escape` to close.

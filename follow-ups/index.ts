@@ -5,7 +5,7 @@
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { Markdown, matchesKey, truncateToWidth, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -29,6 +29,7 @@ interface FollowUp {
 	message: string;
 	anchor: FollowUpAnchor;
 	contextSnippet: string;
+	contextText?: string;
 	done: boolean;
 }
 
@@ -139,10 +140,14 @@ function buildAnchor(ctx: ExtensionContext): FollowUpAnchor | undefined {
 	};
 }
 
-function buildContextSnippet(ctx: ExtensionContext): string {
+function buildContextText(ctx: ExtensionContext): string {
 	const targetEntry = findLastAssistantEntry(ctx);
 	if (!targetEntry) return "";
-	const text = textFromEntry(targetEntry);
+	return textFromEntry(targetEntry);
+}
+
+function buildContextSnippet(ctx: ExtensionContext): string {
+	const text = buildContextText(ctx);
 	const snippet = text.slice(0, SNIPPET_MAX_LEN);
 	return text.length > SNIPPET_MAX_LEN ? `${snippet}…` : snippet;
 }
@@ -153,6 +158,25 @@ function notify(ctx: ExtensionContext, message: string, level: "info" | "warning
 	}
 }
 
+function markdownTheme(theme: import("@earendil-works/pi-coding-agent").Theme): MarkdownTheme {
+	return {
+		heading: (text) => theme.fg("mdHeading", text),
+		link: (text) => theme.fg("mdLink", text),
+		linkUrl: (text) => theme.fg("mdLinkUrl", text),
+		code: (text) => theme.fg("mdCode", text),
+		codeBlock: (text) => theme.fg("mdCodeBlock", text),
+		codeBlockBorder: (text) => theme.fg("mdCodeBlockBorder", text),
+		quote: (text) => theme.fg("mdQuote", text),
+		quoteBorder: (text) => theme.fg("mdQuoteBorder", text),
+		hr: (text) => theme.fg("mdHr", text),
+		listBullet: (text) => theme.fg("mdListBullet", text),
+		bold: (text) => theme.bold(text),
+		italic: (text) => theme.italic(text),
+		underline: (text) => theme.underline(text),
+		strikethrough: (text) => theme.strikethrough(text),
+	};
+}
+
 class FollowUpListComponent {
 	private items: FollowUp[];
 	private theme: import("@earendil-works/pi-coding-agent").Theme;
@@ -161,8 +185,11 @@ class FollowUpListComponent {
 	private onEdit: (item: FollowUp) => void;
 	private onSave: (items: FollowUp[]) => void;
 	private onNewFromAnchor: (anchor: FollowUpAnchor) => void;
+	private getPreviewText: (item: FollowUp) => string;
 	private scope: Scope;
 	private selectedIndex = 0;
+	private previewItem?: FollowUp;
+	private previewScroll = 0;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 	private deleteConfirmItem?: FollowUp;
@@ -176,6 +203,7 @@ class FollowUpListComponent {
 		onEdit: (item: FollowUp) => void,
 		onSave: (items: FollowUp[]) => void,
 		onNewFromAnchor: (anchor: FollowUpAnchor) => void,
+		getPreviewText: (item: FollowUp) => string,
 	) {
 		this.items = items;
 		this.scope = scope;
@@ -185,6 +213,7 @@ class FollowUpListComponent {
 		this.onEdit = onEdit;
 		this.onSave = onSave;
 		this.onNewFromAnchor = onNewFromAnchor;
+		this.getPreviewText = getPreviewText;
 	}
 
 	private visibleItems(): FollowUp[] {
@@ -209,6 +238,26 @@ class FollowUpListComponent {
 			}
 			if (matchesKey(data, "n") || matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 				this.deleteConfirmItem = undefined;
+				this.invalidate();
+				return;
+			}
+			return;
+		}
+
+		if (this.previewItem) {
+			if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "q") || matchesKey(data, "p")) {
+				this.previewItem = undefined;
+				this.previewScroll = 0;
+				this.invalidate();
+				return;
+			}
+			if (matchesKey(data, "j") || matchesKey(data, "down")) {
+				this.previewScroll++;
+				this.invalidate();
+				return;
+			}
+			if (matchesKey(data, "k") || matchesKey(data, "up")) {
+				this.previewScroll = Math.max(0, this.previewScroll - 1);
 				this.invalidate();
 				return;
 			}
@@ -289,6 +338,16 @@ class FollowUpListComponent {
 			return;
 		}
 
+		if (matchesKey(data, "p")) {
+			const item = this.selectedItem();
+			if (item) {
+				this.previewItem = item;
+				this.previewScroll = 0;
+				this.invalidate();
+			}
+			return;
+		}
+
 		if (matchesKey(data, "n")) {
 			const item = this.selectedItem();
 			if (item) this.onNewFromAnchor(item.anchor);
@@ -348,10 +407,23 @@ class FollowUpListComponent {
 
 		lines.push("");
 
-		if (this.deleteConfirmItem) {
+		if (this.previewItem) {
+			const previewWidth = Math.max(20, width - 6);
+			const rawText = this.getPreviewText(this.previewItem) || "(no anchored text available)";
+			const markdown = new Markdown(rawText, 0, 0, markdownTheme(th));
+			const previewLines = markdown.render(previewWidth);
+			const maxVisible = 12;
+			this.previewScroll = Math.min(this.previewScroll, Math.max(0, previewLines.length - maxVisible));
+			lines.push(truncateToWidth(`  ${th.fg("accent", "Preview anchored message")} ${th.fg("dim", "(j/k scroll, p/q close)")}`, width));
+			lines.push(truncateToWidth(`  ${th.fg("borderMuted", "─".repeat(previewWidth))}`, width));
+			for (const line of previewLines.slice(this.previewScroll, this.previewScroll + maxVisible)) {
+				lines.push(truncateToWidth(`  ${line}`, width));
+			}
+			lines.push(truncateToWidth(`  ${th.fg("borderMuted", "─".repeat(previewWidth))}`, width));
+		} else if (this.deleteConfirmItem) {
 			lines.push(truncateToWidth(`  ${th.fg("warning", "Delete this follow-up? (y/n)")}`, width));
 		} else {
-			lines.push(truncateToWidth(`  ${th.fg("dim", "enter=pop  e=edit  ctrl-d=delete  u/d=move  tab=scope  n=new  q=close")}`, width));
+			lines.push(truncateToWidth(`  ${th.fg("dim", "enter=pop  p=preview  e=edit  ctrl-d=delete  u/d=move  tab=scope  n=new  q=close")}`, width));
 		}
 
 		lines.push("");
@@ -389,6 +461,7 @@ async function recordFollowUp(ctx: ExtensionCommandContext): Promise<void> {
 		return;
 	}
 
+	const contextText = buildContextText(ctx);
 	const snippet = buildContextSnippet(ctx);
 	const message = await ctx.ui.editor("New follow-up", "");
 	if (message === undefined || message.trim() === "") {
@@ -403,6 +476,7 @@ async function recordFollowUp(ctx: ExtensionCommandContext): Promise<void> {
 		message: message.trim(),
 		anchor,
 		contextSnippet: snippet,
+		contextText,
 		done: false,
 	};
 	items.push(followUp);
@@ -429,6 +503,10 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 
 	let items = await loadFollowUps(path);
 	let scope: Scope = "session";
+	const previewText = (item: FollowUp): string => {
+		const entry = ctx.sessionManager.getEntry(item.anchor.nodeId);
+		return (entry ? textFromEntry(entry) : "") || item.contextText || item.contextSnippet;
+	};
 
 	const popped = await ctx.ui.custom<{ item: FollowUp; mode: "direct" | "branch" } | undefined>(async (_tui, theme, _kb, done) => {
 		const redraw = () => component.invalidate();
@@ -460,18 +538,22 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 				done(undefined);
 				const message = await ctx.ui.editor("New follow-up (same anchor)", "");
 				if (message !== undefined && message.trim() !== "") {
+					const entry = ctx.sessionManager.getEntry(anchor.nodeId);
+					const contextText = entry ? textFromEntry(entry) : "";
 					items.push({
 						id: randomUUID(),
 						createdAt: new Date().toISOString(),
 						message: message.trim(),
 						anchor,
-						contextSnippet: "(same anchor)",
+						contextSnippet: contextText ? oneLineSnippet(contextText, SNIPPET_MAX_LEN) : "(same anchor)",
+						contextText,
 						done: false,
 					});
 					await saveFollowUps(path, items);
 				}
 				await listFollowUps(ctx);
 			},
+			previewText,
 		);
 
 		return component;
