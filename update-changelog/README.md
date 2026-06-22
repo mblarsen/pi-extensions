@@ -4,6 +4,12 @@ Interactive changelog viewer and updater for installed Pi packages.
 
 Detects available package updates asynchronously on startup, shows commit history, GitHub releases, and raw CHANGELOGs in a TUI overlay, and installs updates directly from the list.
 
+## Demo
+
+![Update changelog package list](./demo1.png)
+
+![Update changelog detail view](./demo2.png)
+
 ## Install
 
 ```bash
