@@ -6,7 +6,7 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { Markdown, matchesKey, truncateToWidth, type MarkdownTheme } from "@earendil-works/pi-tui";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -32,6 +32,10 @@ interface FollowUp {
 	contextText?: string;
 	done: boolean;
 }
+
+type FollowUpListResult =
+	| { type: "single"; item: FollowUp; mode: "direct" | "branch" }
+	| { type: "all"; items: FollowUp[] };
 
 function oneLineSnippet(text: string, maxLength = 96): string {
 	const oneLine = text.replace(/\s+/g, " ").trim();
@@ -94,9 +98,14 @@ async function loadFollowUps(path: string): Promise<FollowUp[]> {
 }
 
 async function saveFollowUps(path: string, items: FollowUp[]): Promise<void> {
+	if (items.length === 0) {
+		await rm(path, { force: true });
+		return;
+	}
+
 	await mkdir(dirname(path), { recursive: true });
 	const lines = items.map((item) => JSON.stringify(item)).join("\n");
-	await writeFile(path, lines ? `${lines}\n` : "", "utf8");
+	await writeFile(path, `${lines}\n`, "utf8");
 }
 
 function activeItems(items: FollowUp[]): FollowUp[] {
@@ -107,12 +116,15 @@ function doneItems(items: FollowUp[]): FollowUp[] {
 	return items.filter((item) => item.done);
 }
 
-function filterByScope(items: FollowUp[], scope: Scope, ctx: ExtensionContext): FollowUp[] {
-	const sessionId = ctx.sessionManager.getSessionId();
+function filterByScope(items: FollowUp[], scope: Scope, sessionId: string): FollowUp[] {
 	if (scope === "session") {
 		return items.filter((item) => item.anchor.sessionId === sessionId);
 	}
 	return items;
+}
+
+function formatFollowUpsForPaste(items: FollowUp[]): string {
+	return items.map((item, index) => `Comment #${index + 1}:\n${item.message}`).join("\n\n");
 }
 
 function findLastAssistantEntry(ctx: ExtensionContext): SessionEntry | undefined {
@@ -182,24 +194,29 @@ class FollowUpListComponent {
 	private theme: import("@earendil-works/pi-coding-agent").Theme;
 	private onClose: () => void;
 	private onPop: (item: FollowUp, mode: "direct" | "branch") => void;
+	private onPopAll: (items: FollowUp[]) => void;
 	private onEdit: (item: FollowUp) => void;
 	private onSave: (items: FollowUp[]) => void;
 	private onNewFromAnchor: (anchor: FollowUpAnchor) => void;
 	private getPreviewText: (item: FollowUp) => string;
 	private scope: Scope;
+	private sessionId: string;
 	private selectedIndex = 0;
 	private previewItem?: FollowUp;
 	private previewScroll = 0;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 	private deleteConfirmItem?: FollowUp;
+	private notice?: string;
 
 	constructor(
 		items: FollowUp[],
 		scope: Scope,
+		sessionId: string,
 		theme: import("@earendil-works/pi-coding-agent").Theme,
 		onClose: () => void,
 		onPop: (item: FollowUp, mode: "direct" | "branch") => void,
+		onPopAll: (items: FollowUp[]) => void,
 		onEdit: (item: FollowUp) => void,
 		onSave: (items: FollowUp[]) => void,
 		onNewFromAnchor: (anchor: FollowUpAnchor) => void,
@@ -207,17 +224,24 @@ class FollowUpListComponent {
 	) {
 		this.items = items;
 		this.scope = scope;
+		this.sessionId = sessionId;
 		this.theme = theme;
 		this.onClose = onClose;
 		this.onPop = onPop;
+		this.onPopAll = onPopAll;
 		this.onEdit = onEdit;
 		this.onSave = onSave;
 		this.onNewFromAnchor = onNewFromAnchor;
 		this.getPreviewText = getPreviewText;
 	}
 
+	private scopedItems(): FollowUp[] {
+		return filterByScope(this.items, this.scope, this.sessionId);
+	}
+
 	private visibleItems(): FollowUp[] {
-		return [...activeItems(this.items), ...doneItems(this.items)];
+		const scoped = this.scopedItems();
+		return [...activeItems(scoped), ...doneItems(scoped)];
 	}
 
 	private selectedItem(): FollowUp | undefined {
@@ -264,8 +288,21 @@ class FollowUpListComponent {
 			return;
 		}
 
+		this.notice = undefined;
+
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "q")) {
 			this.onClose();
+			return;
+		}
+
+		if (matchesKey(data, "shift+a")) {
+			const activeVisible = activeItems(this.scopedItems());
+			if (activeVisible.length === 0) {
+				this.notice = `No active follow-ups in ${this.scope} scope.`;
+				this.invalidate();
+				return;
+			}
+			this.onPopAll(activeVisible);
 			return;
 		}
 
@@ -423,7 +460,10 @@ class FollowUpListComponent {
 		} else if (this.deleteConfirmItem) {
 			lines.push(truncateToWidth(`  ${th.fg("warning", "Delete this follow-up? (y/n)")}`, width));
 		} else {
-			lines.push(truncateToWidth(`  ${th.fg("dim", "enter=pop  p=preview  e=edit  ctrl-d=delete  u/d=move  tab=scope  n=new  q=close")}`, width));
+			if (this.notice) {
+				lines.push(truncateToWidth(`  ${th.fg("warning", this.notice)}`, width));
+			}
+			lines.push(truncateToWidth(`  ${th.fg("dim", "enter=pop  shift+a=add all  p=preview  e=edit  ctrl-d=delete  u/d=move  tab=scope  n=new  q=close")}`, width));
 		}
 
 		lines.push("");
@@ -508,15 +548,17 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 		return (entry ? textFromEntry(entry) : "") || item.contextText || item.contextSnippet;
 	};
 
-	const popped = await ctx.ui.custom<{ item: FollowUp; mode: "direct" | "branch" } | undefined>(async (_tui, theme, _kb, done) => {
+	const popped = await ctx.ui.custom<FollowUpListResult | undefined>(async (_tui, theme, _kb, done) => {
 		const redraw = () => component.invalidate();
 
 		const component = new FollowUpListComponent(
-			filterByScope(items, scope, ctx),
+			items,
 			scope,
+			ctx.sessionManager.getSessionId(),
 			theme,
 			() => done(undefined),
-			(item, mode) => done({ item, mode }),
+			(item, mode) => done({ type: "single", item, mode }),
+			(activeVisible) => done({ type: "all", items: activeVisible }),
 			async (item) => {
 				done(undefined);
 				const updated = await ctx.ui.editor("Edit follow-up", item.message);
@@ -560,6 +602,17 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 	});
 
 	if (!popped) return;
+
+	if (popped.type === "all") {
+		const ids = new Set(popped.items.map((item) => item.id));
+		for (const item of items) {
+			if (ids.has(item.id)) item.done = true;
+		}
+		await saveFollowUps(path, items);
+		ctx.ui.pasteToEditor(formatFollowUpsForPaste(popped.items));
+		ctx.ui.setStatus("follow-ups", undefined);
+		return;
+	}
 
 	const idx = items.findIndex((i) => i.id === popped.item.id);
 	if (idx >= 0) {
