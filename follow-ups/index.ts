@@ -295,7 +295,7 @@ class FollowUpListComponent {
 			return;
 		}
 
-		if (matchesKey(data, "shift+a")) {
+		if (matchesKey(data, "shift+enter")) {
 			const activeVisible = activeItems(this.scopedItems());
 			if (activeVisible.length === 0) {
 				this.notice = `No active follow-ups in ${this.scope} scope.`;
@@ -463,7 +463,7 @@ class FollowUpListComponent {
 			if (this.notice) {
 				lines.push(truncateToWidth(`  ${th.fg("warning", this.notice)}`, width));
 			}
-			lines.push(truncateToWidth(`  ${th.fg("dim", "enter=pop  shift+a=add all  p=preview  e=edit  ctrl-d=delete  u/d=move  tab=scope  n=new  q=close")}`, width));
+			lines.push(truncateToWidth(`  ${th.fg("dim", "enter=pop  shift+enter=pop all  p=preview  e=edit  ctrl-d=delete  u/d=move  tab=scope  n=new  q=close")}`, width));
 		}
 
 		lines.push("");
