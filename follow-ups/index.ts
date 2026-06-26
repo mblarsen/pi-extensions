@@ -173,8 +173,10 @@ function notify(ctx: ExtensionContext, message: string, level: "info" | "warning
 
 function setFollowUpFooterStatus(ctx: ExtensionContext, items: FollowUp[]): void {
 	if (!ctx.hasUI) return;
-	const count = activeItems(items).length;
-	ctx.ui.setStatus(FOOTER_STATUS_KEY, count > 0 ? `follow-up: ${count}` : undefined);
+	const active = activeItems(items);
+	const allCount = active.length;
+	const sessionCount = filterByScope(active, "session", ctx.sessionManager.getSessionId()).length;
+	ctx.ui.setStatus(FOOTER_STATUS_KEY, allCount > 0 ? `follow-up: ${sessionCount}/${allCount}` : undefined);
 }
 
 async function refreshFollowUpFooterStatus(ctx: ExtensionContext): Promise<void> {
