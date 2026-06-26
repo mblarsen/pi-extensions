@@ -32,6 +32,8 @@ Filter to just this extension in `~/.pi/agent/settings.json`:
 
 Follow-ups are stored in `.pi/follow-ups.jsonl` at the project root.
 
+When not-done follow-ups exist, the footer status item with key `follow-up` shows `follow-up: <count>`.
+
 ## List controls
 
 | Key | Action |

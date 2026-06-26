@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 
 const COMMAND_NAME = "follow-up";
 const FOLLOW_UPS_FILE = ".pi/follow-ups.jsonl";
+const FOOTER_STATUS_KEY = "follow-up";
 const SNIPPET_MAX_LEN = 240;
 
 type Scope = "session" | "project";
@@ -168,6 +169,21 @@ function notify(ctx: ExtensionContext, message: string, level: "info" | "warning
 	if (ctx.hasUI) {
 		ctx.ui.notify(message, level);
 	}
+}
+
+function setFollowUpFooterStatus(ctx: ExtensionContext, items: FollowUp[]): void {
+	if (!ctx.hasUI) return;
+	const count = activeItems(items).length;
+	ctx.ui.setStatus(FOOTER_STATUS_KEY, count > 0 ? `follow-up: ${count}` : undefined);
+}
+
+async function refreshFollowUpFooterStatus(ctx: ExtensionContext): Promise<void> {
+	const path = followUpsPath(ctx);
+	if (!path) {
+		if (ctx.hasUI) ctx.ui.setStatus(FOOTER_STATUS_KEY, undefined);
+		return;
+	}
+	setFollowUpFooterStatus(ctx, await loadFollowUps(path));
 }
 
 function markdownTheme(theme: import("@earendil-works/pi-coding-agent").Theme): MarkdownTheme {
@@ -521,6 +537,7 @@ async function recordFollowUp(ctx: ExtensionCommandContext): Promise<void> {
 	};
 	items.push(followUp);
 	await saveFollowUps(path, items);
+	setFollowUpFooterStatus(ctx, items);
 	notify(ctx, "Follow-up saved.", "info");
 }
 
@@ -542,6 +559,7 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 	}
 
 	let items = await loadFollowUps(path);
+	setFollowUpFooterStatus(ctx, items);
 	let scope: Scope = "session";
 	const previewText = (item: FollowUp): string => {
 		const entry = ctx.sessionManager.getEntry(item.anchor.nodeId);
@@ -567,6 +585,7 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 					if (idx >= 0) {
 						items[idx].message = updated;
 						await saveFollowUps(path, items);
+						setFollowUpFooterStatus(ctx, items);
 					}
 				}
 				await listFollowUps(ctx);
@@ -574,6 +593,7 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 			async (updatedItems) => {
 				await saveFollowUps(path, updatedItems);
 				items = updatedItems;
+				setFollowUpFooterStatus(ctx, items);
 				redraw();
 			},
 			async (anchor) => {
@@ -592,6 +612,7 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 						done: false,
 					});
 					await saveFollowUps(path, items);
+					setFollowUpFooterStatus(ctx, items);
 				}
 				await listFollowUps(ctx);
 			},
@@ -609,8 +630,8 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 			if (ids.has(item.id)) item.done = true;
 		}
 		await saveFollowUps(path, items);
+		setFollowUpFooterStatus(ctx, items);
 		ctx.ui.pasteToEditor(formatFollowUpsForPaste(popped.items));
-		ctx.ui.setStatus("follow-ups", undefined);
 		return;
 	}
 
@@ -618,6 +639,7 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 	if (idx >= 0) {
 		items[idx].done = true;
 		await saveFollowUps(path, items);
+		setFollowUpFooterStatus(ctx, items);
 	}
 
 	if (popped.mode === "branch") {
@@ -626,11 +648,18 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 	}
 
 	ctx.ui.pasteToEditor(popped.item.message);
-	ctx.ui.setStatus("follow-ups", undefined);
 }
 
 
 export default function (pi: ExtensionAPI) {
+	pi.on("session_start", async (_event, ctx) => {
+		await refreshFollowUpFooterStatus(ctx);
+	});
+
+	pi.on("session_tree", async (_event, ctx) => {
+		await refreshFollowUpFooterStatus(ctx);
+	});
+
 	pi.registerCommand(COMMAND_NAME, {
 		description: "Capture a follow-up note anchored to the current message. Usage: /follow-up [list]",
 		getArgumentCompletions: (prefix) => {
