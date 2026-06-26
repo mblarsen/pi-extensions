@@ -30,9 +30,9 @@ Filter to just this extension in `~/.pi/agent/settings.json`:
 | `/follow-up` | Open a composer and save a follow-up anchored to the nearest previous non-empty assistant message. |
 | `/follow-up list` | Open the follow-ups list for the current session. |
 
-Follow-ups are stored in `.pi/follow-ups.jsonl` at the project root.
+Follow-ups are stored in `.pi/follow-ups.jsonl` at the repo root, shared by linked worktrees.
 
-When not-done follow-ups exist, the footer status item with key `follow-up` shows `follow-up: <session-count>/<project-count>`.
+When not-done follow-ups exist, the footer status item with key `follow-up` shows `follow-up: <session-count>/<worktree-count>/<repo-count>`.
 
 ## List controls
 
@@ -43,7 +43,7 @@ When not-done follow-ups exist, the footer status item with key `follow-up` show
 | `e` | Edit selected follow-up. |
 | `ctrl-d` | Delete selected follow-up with confirmation. |
 | `u` / `d` | Move selected follow-up up or down. |
-| `tab` | Toggle between current-session and whole-project scope. |
+| `tab` | Cycle between current-session, current-worktree, and whole-repo scope. |
 | `n` | Create a new follow-up using the selected item’s anchor. |
 | `j` / `k`, arrows | Navigate. |
 | `q`, `escape`, `ctrl-c` | Close the list, or close preview mode when previewing. |
@@ -58,7 +58,7 @@ Each follow-up stores:
 - created timestamp
 - session ID
 - Pi tree node ID
-- worktree/project root
+- worktree root
 - snippet of the anchored assistant message
 - full anchored assistant text for previewing
 

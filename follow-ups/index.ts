@@ -9,14 +9,14 @@ import { Markdown, matchesKey, truncateToWidth, type MarkdownTheme } from "@eare
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 
 const COMMAND_NAME = "follow-up";
 const FOLLOW_UPS_FILE = ".pi/follow-ups.jsonl";
 const FOOTER_STATUS_KEY = "follow-up";
 const SNIPPET_MAX_LEN = 240;
 
-type Scope = "session" | "project";
+type Scope = "session" | "worktree" | "repo";
 
 interface FollowUpAnchor {
 	sessionId: string;
@@ -63,11 +63,11 @@ function textFromEntry(entry: SessionEntry): string {
 		.join("\n");
 }
 
-function findProjectRoot(cwd: string): string | undefined {
-	// Walk up from cwd looking for .git/.pi marker, but stop at filesystem root.
+function findWorktreeRoot(cwd: string): string | undefined {
+	// Walk up from cwd looking for a worktree-local .git marker, but stop at filesystem root.
 	let current = resolve(cwd);
 	while (true) {
-		if (existsSync(join(current, ".pi")) || existsSync(join(current, ".git"))) {
+		if (existsSync(join(current, ".git"))) {
 			return current;
 		}
 		const parent = dirname(current);
@@ -77,10 +77,37 @@ function findProjectRoot(cwd: string): string | undefined {
 	return undefined;
 }
 
+function resolveGitDir(worktreeRoot: string): string | undefined {
+	const dotGit = join(worktreeRoot, ".git");
+	if (!existsSync(dotGit)) return undefined;
+	const stat = statSync(dotGit);
+	if (stat.isDirectory()) return dotGit;
+	if (!stat.isFile()) return undefined;
+	const match = readFileSync(dotGit, "utf8").trim().match(/^gitdir:\s*(.+)$/);
+	if (!match) return undefined;
+	return resolve(worktreeRoot, match[1]);
+}
+
+function resolveCommonGitDir(gitDir: string): string {
+	const commonDirFile = join(gitDir, "commondir");
+	if (!existsSync(commonDirFile)) return gitDir;
+	const commonDir = readFileSync(commonDirFile, "utf8").trim();
+	return resolve(gitDir, commonDir);
+}
+
+function findRepoRoot(cwd: string): string | undefined {
+	const worktreeRoot = findWorktreeRoot(cwd);
+	if (!worktreeRoot) return undefined;
+	const gitDir = resolveGitDir(worktreeRoot);
+	if (!gitDir) return worktreeRoot;
+	const commonGitDir = resolveCommonGitDir(gitDir);
+	return dirname(commonGitDir);
+}
+
 function followUpsPath(ctx: ExtensionContext): string | undefined {
-	const projectRoot = findProjectRoot(ctx.cwd);
-	if (!projectRoot) return undefined;
-	return join(projectRoot, FOLLOW_UPS_FILE);
+	const repoRoot = findRepoRoot(ctx.cwd);
+	if (!repoRoot) return undefined;
+	return join(repoRoot, FOLLOW_UPS_FILE);
 }
 
 async function loadFollowUps(path: string): Promise<FollowUp[]> {
@@ -117,9 +144,12 @@ function doneItems(items: FollowUp[]): FollowUp[] {
 	return items.filter((item) => item.done);
 }
 
-function filterByScope(items: FollowUp[], scope: Scope, sessionId: string): FollowUp[] {
+function filterByScope(items: FollowUp[], scope: Scope, sessionId: string, worktreeRoot: string): FollowUp[] {
 	if (scope === "session") {
 		return items.filter((item) => item.anchor.sessionId === sessionId);
+	}
+	if (scope === "worktree") {
+		return items.filter((item) => item.anchor.worktreeRoot === worktreeRoot);
 	}
 	return items;
 }
@@ -144,12 +174,12 @@ function findLastAssistantEntry(ctx: ExtensionContext): SessionEntry | undefined
 function buildAnchor(ctx: ExtensionContext): FollowUpAnchor | undefined {
 	const targetEntry = findLastAssistantEntry(ctx);
 	if (!targetEntry) return undefined;
-	const projectRoot = findProjectRoot(ctx.cwd);
-	if (!projectRoot) return undefined;
+	const worktreeRoot = findWorktreeRoot(ctx.cwd);
+	if (!worktreeRoot) return undefined;
 	return {
 		sessionId: ctx.sessionManager.getSessionId(),
 		nodeId: targetEntry.id,
-		worktreeRoot: projectRoot,
+		worktreeRoot,
 	};
 }
 
@@ -173,10 +203,16 @@ function notify(ctx: ExtensionContext, message: string, level: "info" | "warning
 
 function setFollowUpFooterStatus(ctx: ExtensionContext, items: FollowUp[]): void {
 	if (!ctx.hasUI) return;
+	const worktreeRoot = findWorktreeRoot(ctx.cwd);
+	if (!worktreeRoot) {
+		ctx.ui.setStatus(FOOTER_STATUS_KEY, undefined);
+		return;
+	}
 	const active = activeItems(items);
-	const allCount = active.length;
-	const sessionCount = filterByScope(active, "session", ctx.sessionManager.getSessionId()).length;
-	ctx.ui.setStatus(FOOTER_STATUS_KEY, allCount > 0 ? `follow-up: ${sessionCount}/${allCount}` : undefined);
+	const repoCount = active.length;
+	const sessionCount = filterByScope(active, "session", ctx.sessionManager.getSessionId(), worktreeRoot).length;
+	const worktreeCount = filterByScope(active, "worktree", ctx.sessionManager.getSessionId(), worktreeRoot).length;
+	ctx.ui.setStatus(FOOTER_STATUS_KEY, repoCount > 0 ? `follow-up: ${sessionCount}/${worktreeCount}/${repoCount}` : undefined);
 }
 
 async function refreshFollowUpFooterStatus(ctx: ExtensionContext): Promise<void> {
@@ -219,6 +255,7 @@ class FollowUpListComponent {
 	private getPreviewText: (item: FollowUp) => string;
 	private scope: Scope;
 	private sessionId: string;
+	private worktreeRoot: string;
 	private selectedIndex = 0;
 	private previewItem?: FollowUp;
 	private previewScroll = 0;
@@ -231,6 +268,7 @@ class FollowUpListComponent {
 		items: FollowUp[],
 		scope: Scope,
 		sessionId: string,
+		worktreeRoot: string,
 		theme: import("@earendil-works/pi-coding-agent").Theme,
 		onClose: () => void,
 		onPop: (item: FollowUp, mode: "direct" | "branch") => void,
@@ -243,6 +281,7 @@ class FollowUpListComponent {
 		this.items = items;
 		this.scope = scope;
 		this.sessionId = sessionId;
+		this.worktreeRoot = worktreeRoot;
 		this.theme = theme;
 		this.onClose = onClose;
 		this.onPop = onPop;
@@ -254,7 +293,7 @@ class FollowUpListComponent {
 	}
 
 	private scopedItems(): FollowUp[] {
-		return filterByScope(this.items, this.scope, this.sessionId);
+		return filterByScope(this.items, this.scope, this.sessionId, this.worktreeRoot);
 	}
 
 	private visibleItems(): FollowUp[] {
@@ -372,7 +411,7 @@ class FollowUpListComponent {
 		}
 
 		if (matchesKey(data, "tab")) {
-			this.scope = this.scope === "session" ? "project" : "session";
+			this.scope = this.scope === "session" ? "worktree" : this.scope === "worktree" ? "repo" : "session";
 			this.selectedIndex = 0;
 			this.invalidate();
 			return;
@@ -504,7 +543,7 @@ class FollowUpListComponent {
 async function recordFollowUp(ctx: ExtensionCommandContext): Promise<void> {
 	const path = followUpsPath(ctx);
 	if (!path) {
-		notify(ctx, "Could not determine project root for follow-ups.", "error");
+		notify(ctx, "Could not determine repo root for follow-ups.", "error");
 		return;
 	}
 
@@ -546,7 +585,7 @@ async function recordFollowUp(ctx: ExtensionCommandContext): Promise<void> {
 async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 	const path = followUpsPath(ctx);
 	if (!path) {
-		notify(ctx, "Could not determine project root for follow-ups.", "error");
+		notify(ctx, "Could not determine repo root for follow-ups.", "error");
 		return;
 	}
 
@@ -557,6 +596,12 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 
 	if (!ctx.isIdle()) {
 		notify(ctx, "Press Escape to stop the current turn, then run /follow-up list again.", "warning");
+		return;
+	}
+
+	const worktreeRoot = findWorktreeRoot(ctx.cwd);
+	if (!worktreeRoot) {
+		notify(ctx, "Could not determine worktree root for follow-ups.", "error");
 		return;
 	}
 
@@ -575,6 +620,7 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 			items,
 			scope,
 			ctx.sessionManager.getSessionId(),
+			worktreeRoot,
 			theme,
 			() => done(undefined),
 			(item, mode) => done({ type: "single", item, mode }),
