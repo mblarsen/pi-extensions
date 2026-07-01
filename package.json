@@ -14,7 +14,8 @@
       "./fux/index.ts",
       "./footer-manager/index.ts",
       "./update-changelog/index.ts",
-      "./follow-ups/index.ts"
+      "./follow-ups/index.ts",
+      "./slack-emojis/index.ts"
     ],
     "skills": [
       "./fux/fux-skill/SKILL.md"
@@ -31,5 +32,8 @@
     "@earendil-works/pi-coding-agent": "^0.79.0",
     "@earendil-works/pi-tui": "^0.79.0",
     "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "gemoji": "^8.1.0"
   }
 }

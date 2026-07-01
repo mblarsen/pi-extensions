@@ -10,6 +10,7 @@ Personal extensions for the [Pi coding agent](https://github.com/earendil-works/
 | [fux](fux/) | Fork a session into a side tmux pane for tangential exploration, then merge back into same tree. |
 | [footer-manager](footer-manager/) | Toggle, reorder, and zen-mode the Pi status footer interactively. |
 | [follow-ups](follow-ups/) | Queue notes anchored to prior assistant messages and pop them into the chat input later. |
+| [slack-emojis](slack-emojis/) | Convert Slack/GitHub-style shortcodes like `:moon:` into emoji, with editor autocomplete. |
 | [update-changelog](update-changelog/) | Interactive changelog viewer and updater for installed Pi packages. |
 
 ## Agent Skills
