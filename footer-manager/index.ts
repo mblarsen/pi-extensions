@@ -601,8 +601,13 @@ export default function (pi: ExtensionAPI) {
 
 	async function openManager(ctx: ExtensionContext): Promise<void> {
 		await ctx.ui.custom((tui, theme, _kb, done) => {
+			const FLASH_INTERVAL_MS = 110;
+			const FLASH_FRAME_COUNT = 4;
 			let keys = buildUiKeys();
 			let selectedIndex = 0;
+			let flashKey: string | undefined;
+			let flashFrame = 0;
+			let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
 			const ensureKeys = () => {
 				keys = buildUiKeys();
@@ -638,10 +643,36 @@ export default function (pi: ExtensionAPI) {
 				tui.requestRender();
 			};
 
+			const clearFlashTimer = () => {
+				if (flashTimer) clearTimeout(flashTimer);
+				flashTimer = undefined;
+			};
+
+			const scheduleFlashTick = () => {
+				clearFlashTimer();
+				flashTimer = setTimeout(() => {
+					flashFrame += 1;
+					if (flashFrame >= FLASH_FRAME_COUNT) flashKey = undefined;
+					tui.requestRender();
+					if (flashKey) scheduleFlashTick();
+				}, FLASH_INTERVAL_MS);
+			};
+
+			const flashLocation = (key: string) => {
+				flashKey = key;
+				flashFrame = 0;
+				tui.requestRender();
+				scheduleFlashTick();
+			};
+
 			const toggleKey = async () => {
 				const key = keys[selectedIndex];
 				if (!key) return;
-				toggleFooterKey(key);
+				const wasHidden = isHidden(key);
+				const enabled = toggleFooterKey(key);
+				ensureKeys();
+				selectedIndex = keys.indexOf(key);
+				if (enabled && wasHidden) flashLocation(key);
 				await persistAndRefresh();
 			};
 
@@ -657,6 +688,7 @@ export default function (pi: ExtensionAPI) {
 					placeKeyAtEnd(key);
 					ensureKeys();
 					selectedIndex = keys.indexOf(key);
+					flashLocation(key);
 					await persistAndRefresh();
 					return;
 				}
@@ -679,6 +711,7 @@ export default function (pi: ExtensionAPI) {
 				setSlotGroups(groups);
 				ensureKeys();
 				selectedIndex = keys.indexOf(key);
+				flashLocation(key);
 				await persistAndRefresh();
 			};
 
@@ -735,7 +768,9 @@ export default function (pi: ExtensionAPI) {
 							const marker = isSelected ? theme.fg("accent", "›") : theme.fg("dim", " ");
 							const badge = isRenderedHidden(key) ? theme.fg("warning", state.zenEnabled ? "ZEN" : "OFF") : theme.fg("success", " ON");
 							const source = isBuiltinKey(key) ? theme.fg("accent", "built-in") : theme.fg("dim", "ext");
-							const side = isHidden(key) ? theme.fg("dim", "unknown") : ref ? theme.fg("dim", `line ${ref.lineIndex + 1} ${ref.side}`) : theme.fg("dim", "unplaced");
+							const layoutInfo = isHidden(key) ? "unknown" : ref ? `line ${ref.lineIndex + 1} ${ref.side}` : "unplaced";
+							const isFlashing = flashKey === key && flashFrame % 2 === 0;
+							const side = isFlashing ? theme.fg("warning", theme.bold(layoutInfo)) : isSelected ? layoutInfo : theme.fg("dim", layoutInfo);
 							const preview = snapshot ? getItemText(key, snapshot, statuses) : undefined;
 							const keyLabel = isSelected ? theme.fg("accent", theme.bold(key)) : key;
 							lines.push(frameSplitLine(`${marker} [${badge}] [${source}] ${keyLabel}`, side, safeWidth));
@@ -784,6 +819,7 @@ export default function (pi: ExtensionAPI) {
 						return;
 					}
 					if (data === "e") {
+						clearFlashTimer();
 						done(undefined);
 						void (async () => {
 							await openLayoutEditor(ctx);
@@ -800,6 +836,7 @@ export default function (pi: ExtensionAPI) {
 						return;
 					}
 					if (matchesKey(data, Key.escape)) {
+						clearFlashTimer();
 						done(undefined);
 					}
 				},
