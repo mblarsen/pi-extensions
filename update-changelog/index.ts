@@ -24,6 +24,8 @@ interface PackageUpdate {
   changelogFileContent?: string | null;
   installedSuccess?: boolean;
   latestDate?: string | null;
+  updateStatus?: "queued" | "updating" | "success" | "error";
+  updateError?: string;
 }
 
 function getAgentDir(): string {
@@ -440,8 +442,9 @@ class UpdateExplorer {
   private maxDetailLines = 20;
 
   private isUpdating = false;
-  private isWaitingAfterInstall = false;
-  private updatingPackageName = "";
+  private updateQueue: PackageUpdate[] = [];
+  private removalTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private disposed = false;
   private isConfirmingUpdate = false;
   private confirmingPackage: PackageUpdate | null = null;
 
@@ -637,6 +640,8 @@ class UpdateExplorer {
   }
 
   private tryPerformUpdate(update: PackageUpdate) {
+    if (update.installedSuccess || update.updateStatus === "updating" || update.updateStatus === "queued") return;
+
     const ageInDays = getPackageAgeInDays(update.latestDate);
     if (ageInDays < 3.0) {
       this.isConfirmingUpdate = true;
@@ -648,30 +653,56 @@ class UpdateExplorer {
       }
       this.tui.requestRender();
     } else {
-      this.performUpdate(update);
+      this.queueOrStartUpdate(update);
     }
   }
 
-  private async performUpdate(update: PackageUpdate) {
-    if (this.isUpdating || this.isWaitingAfterInstall) return;
-    
-    // Switch to list view so the update progress can be shown inline
+  private queueOrStartUpdate(update: PackageUpdate) {
+    if (update.installedSuccess || update.updateStatus === "updating" || update.updateStatus === "queued") return;
+
     if (this.mode === "details") {
       this.mode = "list";
       this.selectedResult = null;
       this.buildSelectList();
     }
 
+    update.updateError = undefined;
+    if (this.isUpdating) {
+      update.updateStatus = "queued";
+      this.updateQueue.push(update);
+      this.updateSelectListSpinners();
+      this.rebuild();
+      this.tui.requestRender();
+      return;
+    }
+
+    void this.performUpdate(update);
+  }
+
+  private startNextQueuedUpdate() {
+    if (this.isUpdating) return;
+
+    while (this.updateQueue.length > 0) {
+      const next = this.updateQueue.shift();
+      if (!next || !this.results.includes(next) || next.installedSuccess) continue;
+      next.updateStatus = undefined;
+      this.queueOrStartUpdate(next);
+      return;
+    }
+  }
+
+  private async performUpdate(update: PackageUpdate) {
+    if (this.isUpdating || update.installedSuccess) return;
+
     this.isUpdating = true;
-    this.updatingPackageName = update.displayName;
+    update.updateStatus = "updating";
+    update.updateError = undefined;
     this.updateSelectListSpinners();
     this.rebuild();
     this.tui.requestRender();
 
     try {
       let res;
-      const customEnv = typeof process !== "undefined" ? { ...process.env } : {};
-      delete customEnv.PI_OFFLINE;
 
       try {
         // Try executing the global 'pi' binary via 'env' to override PI_OFFLINE variable
@@ -692,37 +723,54 @@ class UpdateExplorer {
 
       if (res && res.code === 0) {
         update.installedSuccess = true;
-        this.isWaitingAfterInstall = true;
+        update.updateStatus = "success";
         if (this.onUpdateInstalled) {
           this.onUpdateInstalled(update.displayName);
         }
+        if (this.disposed) return;
         this.updateSelectListSpinners();
         this.rebuild();
         this.tui.requestRender();
 
-        setTimeout(() => {
-          this.isWaitingAfterInstall = false;
+        const timer = setTimeout(() => {
+          this.removalTimers.delete(update.displayName);
           this.results = this.results.filter(r => r.displayName !== update.displayName);
-          this.selectedResult = null;
-          this.mode = "list";
+          if (this.selectedResult === update) {
+            this.selectedResult = null;
+            this.mode = "list";
+          }
           
           if (this.results.length > 0) {
             this.buildSelectList();
+            this.updateSelectListSpinners();
           }
           this.rebuild();
           this.tui.requestRender();
         }, 1500);
+        this.removalTimers.set(update.displayName, timer);
       } else {
         const errorMsg = res ? (res.stderr || res.stdout || "Unknown error during update.") : "Unknown execution error.";
+        update.updateStatus = "error";
+        update.updateError = errorMsg;
+        if (this.disposed) return;
         this.tui.notify(`Failed to update ${update.displayName}: ${errorMsg.slice(0, 100)}`, "error");
+        this.updateSelectListSpinners();
         this.rebuild();
         this.tui.requestRender();
       }
     } catch (err: any) {
       this.isUpdating = false;
+      update.updateStatus = "error";
+      update.updateError = err.message;
+      if (this.disposed) return;
       this.tui.notify(`Failed to update: ${err.message}`, "error");
+      this.updateSelectListSpinners();
       this.rebuild();
       this.tui.requestRender();
+    } finally {
+      if (!this.disposed) {
+        this.startNextQueuedUpdate();
+      }
     }
   }
 
@@ -746,6 +794,15 @@ class UpdateExplorer {
       }
       if (r.installedSuccess) {
         return { value: r.displayName, label: `✓ ${r.displayName}`, description: `installed!` };
+      }
+      if (r.updateStatus === "updating") {
+        return { value: r.displayName, label: `${this.spinnerFrames[this.spinnerIdx]} ${r.displayName}`, description: `Updating...` };
+      }
+      if (r.updateStatus === "queued") {
+        return { value: r.displayName, label: `⏳ ${r.displayName}`, description: `Queued for update` };
+      }
+      if (r.updateStatus === "error") {
+        return { value: r.displayName, label: `✗ ${r.displayName}`, description: `Failed — press u to retry` };
       }
       return { value: r.displayName, label: r.displayName, description: desc };
     });
@@ -778,8 +835,7 @@ class UpdateExplorer {
     };
 
     this.selectList.onCancel = () => {
-      clearInterval(this.timer);
-      this.done();
+      this.close();
     };
   }
 
@@ -816,7 +872,7 @@ class UpdateExplorer {
           item.description = newDesc;
           mutated = true;
         }
-      } else if (this.isUpdating && r.displayName === this.updatingPackageName) {
+      } else if (r.updateStatus === "updating") {
         const spinner = this.spinnerFrames[this.spinnerIdx];
         const newLabel = `${spinner} ${baseLabel}`;
         const newDesc = `Updating...`;
@@ -828,6 +884,22 @@ class UpdateExplorer {
       } else if (r.installedSuccess) {
         const newLabel = `✓ ${baseLabel}`;
         const newDesc = `installed!`;
+        if (item.label !== newLabel || item.description !== newDesc) {
+          item.label = newLabel;
+          item.description = newDesc;
+          mutated = true;
+        }
+      } else if (r.updateStatus === "queued") {
+        const newLabel = `⏳ ${baseLabel}`;
+        const newDesc = `Queued for update`;
+        if (item.label !== newLabel || item.description !== newDesc) {
+          item.label = newLabel;
+          item.description = newDesc;
+          mutated = true;
+        }
+      } else if (r.updateStatus === "error") {
+        const newLabel = `✗ ${baseLabel}`;
+        const newDesc = `Failed — press u to retry`;
         if (item.label !== newLabel || item.description !== newDesc) {
           item.label = newLabel;
           item.description = newDesc;
@@ -894,30 +966,34 @@ class UpdateExplorer {
         const sep = this.theme.fg("dim", " • ");
         const bracketKey = (k: string, rest: string) => action("[") + key(k) + action("]" + rest);
 
-        const navText = `${key("↑↓/jk")} ${action("navigate")}${sep}${key("enter")} ${action("view")}${sep}${bracketKey("u", "pdate")}${sep}${key("esc")} ${action("close")}`;
+        const navText = `${key("↑↓/jk")} ${action("navigate")}${sep}${key("enter")} ${action("view")}${sep}${bracketKey("u", "pdate/queue")}${sep}${key("esc")} ${action("close")}`;
         this.container.addChild(new Text(navText, 0, 0));
       }
     }
   }
 
-  handleInput(data: string) {
-    if (this.isUpdating || this.isWaitingAfterInstall) {
-      if (matchesKey(data, Key.ctrl("c"))) {
-        clearInterval(this.timer);
-        this.done();
-      }
-      return;
+  private close() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.updateQueue = [];
+    clearInterval(this.timer);
+    for (const timer of this.removalTimers.values()) {
+      clearTimeout(timer);
     }
+    this.removalTimers.clear();
+    this.done();
+  }
 
+  handleInput(data: string) {
     if (this.isConfirmingUpdate) {
-      if (matchesKey(data, "y") || matchesKey(data, "Y")) {
+      if (matchesKey(data, "y") || data === "Y") {
         const pkg = this.confirmingPackage;
         this.isConfirmingUpdate = false;
         this.confirmingPackage = null;
         if (pkg) {
-          this.performUpdate(pkg);
+          this.queueOrStartUpdate(pkg);
         }
-      } else if (matchesKey(data, "n") || matchesKey(data, "N") || matchesKey(data, Key.escape)) {
+      } else if (matchesKey(data, "n") || data === "N" || matchesKey(data, Key.escape)) {
         this.isConfirmingUpdate = false;
         this.confirmingPackage = null;
         if (this.mode === "list") {
@@ -932,8 +1008,7 @@ class UpdateExplorer {
 
     if (this.mode === "loading") {
       if (matchesKey(data, Key.escape) || matchesKey(data, "q") || matchesKey(data, Key.ctrl("c"))) {
-        clearInterval(this.timer);
-        this.done();
+        this.close();
       }
       return;
     }
@@ -985,8 +1060,7 @@ class UpdateExplorer {
     if (this.mode === "list") {
       if (this.results.length === 0) {
         if (matchesKey(data, Key.escape) || matchesKey(data, "q") || matchesKey(data, Key.enter)) {
-          clearInterval(this.timer);
-          this.done();
+          this.close();
         }
         return;
       }
@@ -1259,7 +1333,7 @@ export default function (pi: ExtensionAPI) {
         });
       }
 
-      const overlayOptions = { width: "100%", maxHeight: "90%", anchor: "center" };
+      const overlayOptions: any = { width: "100%", maxHeight: "90%", anchor: "center" };
       await ctx.ui.custom((tui, theme, kb, done) => {
         const explorer = new UpdateExplorer(
           resultsPromise, 
