@@ -33,15 +33,36 @@ Filter to just this extension in `~/.pi/agent/settings.json`:
 | `/footer-manager on` | Enable the managed footer |
 | `/footer-manager off` | Disable the managed footer (revert to default) |
 | `/footer-manager reset` | Reset layout to defaults |
+| `/footer-manager layout` | Edit the footer layout as text |
+| `/footer-manager edit` | Alias for `/footer-manager layout` |
 | `/footer-manager zen` | Toggle zen mode (hide all items) |
 | `/footer-manager zen on` | Enable zen mode |
 | `/footer-manager zen off` | Disable zen mode |
 | `/footer-manager ext <key>` | Toggle visibility of a specific footer item |
-| `/footer-manager status-line on` | Show the extension status line |
-| `/footer-manager status-line off` | Hide the extension status line |
+| `/footer-manager status-line on` | Show extension status items |
+| `/footer-manager status-line off` | Hide extension status items |
 
 **Interactive controls** (inside the manager overlay):
-- **↑↓** select item · **Space/Enter** toggle visibility · **u/d** reorder footer items · **r** reset · **Esc** close
+- **↑↓/j/k** select item · **Space/Enter** toggle visibility · **u/d** move through reading order · **e** edit layout · **r** reset · **Esc** close
+- Off items are listed at the bottom and shown with an unknown layout position.
+
+## Layout editor
+
+Press **e** in the manager, or run `/footer-manager layout`, to edit only the layout shape:
+
+```txt
+x x
+x
+  x
+```
+
+- `x x` means one left slot and one right slot on that line.
+- `x` means a left slot.
+- `  x` means a right slot.
+- The selected item order is edited with **u/d** in the manager, not in the layout editor.
+- A slot can contain multiple items; moving into an occupied slot inserts without pushing existing items out.
+- Empty slots stay empty until an item is moved or toggled into them.
+- Removing slots turns overflow items off; turning one back on places it at the end of the layout.
 
 ## What you can control
 
