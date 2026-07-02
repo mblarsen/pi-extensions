@@ -1,6 +1,6 @@
 # footer-manager
 
-Manage the Pi status footer — toggle built-in items, reorder extension statuses, and enter a minimal "zen" mode.
+Manage the Pi status footer — toggle and reorder built-in items and extension statuses, and enter a minimal "zen" mode.
 
 ## Demo
 
@@ -41,7 +41,7 @@ Filter to just this extension in `~/.pi/agent/settings.json`:
 | `/footer-manager status-line off` | Hide the extension status line |
 
 **Interactive controls** (inside the manager overlay):
-- **↑↓** select item · **Space/Enter** toggle visibility · **u/d** reorder extension items · **r** reset · **Esc** close
+- **↑↓** select item · **Space/Enter** toggle visibility · **u/d** reorder footer items · **r** reset · **Esc** close
 
 ## What you can control
 

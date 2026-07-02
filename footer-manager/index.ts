@@ -24,7 +24,10 @@ type FooterSnapshot = {
 	sessionName: string;
 	statsLeft: string;
 	modelRight: string;
-	visibleStatusTexts: string[];
+};
+
+type FooterTheme = {
+	fg(color: string, text: string): string;
 };
 
 const SETTINGS_KEY = "footerManager";
@@ -85,10 +88,13 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function normalizeState(data: Partial<FooterManagerState> | undefined): FooterManagerState {
+		const order = migrateKeys(Array.isArray(data?.order) ? data.order.filter((item): item is string => typeof item === "string") : []);
+		const migratedOrder = order.length > 0 && !order.some(isBuiltinKey) ? [...BUILTIN_KEYS, ...order] : order;
+
 		return {
 			enabled: typeof data?.enabled === "boolean" ? data.enabled : DEFAULT_STATE.enabled,
 			hidden: migrateKeys(Array.isArray(data?.hidden) ? data.hidden.filter((item): item is string => typeof item === "string") : []),
-			order: migrateKeys(Array.isArray(data?.order) ? data.order.filter((item): item is string => typeof item === "string") : []).filter((key) => !isBuiltinKey(key)),
+			order: migratedOrder,
 			renderStatusLine: typeof data?.renderStatusLine === "boolean" ? data.renderStatusLine : DEFAULT_STATE.renderStatusLine,
 			zenEnabled: typeof data?.zenEnabled === "boolean" ? data.zenEnabled : DEFAULT_STATE.zenEnabled,
 		};
@@ -127,12 +133,14 @@ export default function (pi: ExtensionAPI) {
 		state = normalizeState(settings[SETTINGS_KEY] as Partial<FooterManagerState> | undefined);
 	}
 
-	function getOrderedExtensionKeys(allKeys: string[]): string[] {
-		const extensions = allKeys.filter((key) => !isBuiltinKey(key));
-		const known = new Set(extensions);
+	function getOrderedKeys(allKeys: string[]): string[] {
+		const normalized = Array.from(new Set(allKeys.map(migrateKey)));
+		const known = new Set(normalized);
 		const ordered = state.order.filter((key) => known.has(key));
-		const rest = extensions.filter((key) => !ordered.includes(key)).sort((a, b) => a.localeCompare(b));
-		return [...ordered, ...rest];
+		const orderedSet = new Set(ordered);
+		const builtins = BUILTIN_KEYS.filter((key) => known.has(key) && !orderedSet.has(key));
+		const extensions = normalized.filter((key) => !isBuiltinKey(key) && !orderedSet.has(key)).sort((a, b) => a.localeCompare(b));
+		return [...ordered, ...builtins, ...extensions];
 	}
 
 	function buildFooterSnapshot(ctx: ExtensionContext, footerData: FooterDataRef): FooterSnapshot {
@@ -173,18 +181,11 @@ export default function (pi: ExtensionAPI) {
 		const modelId = ctx.model?.id || "no-model";
 		const providerPrefix = footerData.getAvailableProviderCount() > 1 && ctx.model ? `(${ctx.model.provider}) ` : "";
 		const modelRight = `${providerPrefix}${modelId}`;
-		const statuses = footerData.getExtensionStatuses();
-		const visibleStatusTexts = getOrderedExtensionKeys(Array.from(statuses.keys()))
-			.filter((key) => !isRenderedHidden(key))
-			.map((key) => statuses.get(key))
-			.filter((text): text is string => typeof text === "string" && text.length > 0);
-
 		return {
 			cwd,
 			sessionName,
 			statsLeft: statsParts.join(" "),
 			modelRight,
-			visibleStatusTexts,
 		};
 	}
 
@@ -227,28 +228,7 @@ export default function (pi: ExtensionAPI) {
 				invalidate() {},
 				render(width: number): string[] {
 					const snapshot = buildFooterSnapshot(ctx, footerData);
-					const lines: string[] = [];
-
-					const locationParts = [
-						!isRenderedHidden("builtin.cwd") ? snapshot.cwd : undefined,
-						!isRenderedHidden("builtin.session") ? snapshot.sessionName : undefined,
-					].filter((part): part is string => typeof part === "string" && part.length > 0);
-					if (locationParts.length > 0) {
-						lines.push(truncateToWidth(theme.fg("dim", locationParts.join(" • ")), width, theme.fg("dim", "...")));
-					}
-
-					const statsLeft = isRenderedHidden("builtin.stats") ? "" : snapshot.statsLeft;
-					const modelRight = isRenderedHidden("builtin.model") ? "" : snapshot.modelRight;
-					const statsLine = renderStatsLine(width, statsLeft, modelRight);
-					if (statsLine) {
-						lines.push(theme.fg("dim", statsLine));
-					}
-
-					if (!state.zenEnabled && state.renderStatusLine && snapshot.visibleStatusTexts.length > 0) {
-						lines.push(truncateToWidth(snapshot.visibleStatusTexts.join(" "), width, theme.fg("dim", "...")));
-					}
-
-					return lines;
+					return renderFooterLines(width, snapshot, footerData.getExtensionStatuses(), theme);
 				},
 			};
 		});
@@ -262,10 +242,73 @@ export default function (pi: ExtensionAPI) {
 		return next;
 	}
 
+	function isLocationKey(key: string): boolean {
+		return key === "builtin.cwd" || key === "builtin.session";
+	}
+
+	function isStatsKey(key: string): boolean {
+		return key === "builtin.stats" || key === "builtin.model";
+	}
+
+	function getItemText(key: string, snapshot: FooterSnapshot, statuses: ReadonlyMap<string, string>): string | undefined {
+		switch (key) {
+			case "builtin.cwd":
+				return snapshot.cwd;
+			case "builtin.session":
+				return snapshot.sessionName;
+			case "builtin.stats":
+				return snapshot.statsLeft;
+			case "builtin.model":
+				return snapshot.modelRight;
+			default:
+				return statuses.get(key);
+		}
+	}
+
+	function renderFooterLines(width: number, snapshot: FooterSnapshot, statuses: ReadonlyMap<string, string>, theme: FooterTheme): string[] {
+		const keys = getOrderedKeys([...BUILTIN_KEYS, ...Array.from(statuses.keys())]).filter((key) => !isRenderedHidden(key));
+		const lines: string[] = [];
+
+		for (let index = 0; index < keys.length;) {
+			const key = keys[index];
+			if (isLocationKey(key)) {
+				const parts: string[] = [];
+				while (index < keys.length && isLocationKey(keys[index])) {
+					const text = getItemText(keys[index], snapshot, statuses);
+					if (text) parts.push(text);
+					index += 1;
+				}
+				if (parts.length > 0) lines.push(truncateToWidth(theme.fg("dim", parts.join(" • ")), width, theme.fg("dim", "...")));
+				continue;
+			}
+
+			if (isStatsKey(key)) {
+				const parts: string[] = [];
+				while (index < keys.length && isStatsKey(keys[index])) {
+					const text = getItemText(keys[index], snapshot, statuses);
+					if (text) parts.push(text);
+					index += 1;
+				}
+				const line = parts.length === 2 ? renderStatsLine(width, parts[0], parts[1]) : truncateToWidth(parts.join(" • "), width, "");
+				if (line) lines.push(theme.fg("dim", line));
+				continue;
+			}
+
+			const parts: string[] = [];
+			while (index < keys.length && !isBuiltinKey(keys[index])) {
+				const text = getItemText(keys[index], snapshot, statuses);
+				if (text) parts.push(text);
+				index += 1;
+			}
+			if (state.renderStatusLine && parts.length > 0) lines.push(truncateToWidth(parts.join(" "), width, theme.fg("dim", "...")));
+		}
+
+		return lines;
+	}
+
 	function buildUiKeys(): string[] {
 		const current = footerDataRef ? Array.from(footerDataRef.getExtensionStatuses().keys()) : [];
-		const merged = new Set([...state.order, ...state.hidden, ...current]);
-		return [...BUILTIN_KEYS, ...getOrderedExtensionKeys(Array.from(merged))];
+		return getOrderedKeys([...BUILTIN_KEYS, ...state.order, ...state.hidden, ...current]);
 	}
 
 	function toggleFooterKey(key: string): boolean | undefined {
@@ -345,8 +388,8 @@ export default function (pi: ExtensionAPI) {
 
 			const moveSelected = async (direction: -1 | 1) => {
 				const key = keys[selectedIndex];
-				if (!key || isBuiltinKey(key)) return;
-				const movable = buildUiKeys().filter((item) => !isBuiltinKey(item));
+				if (!key) return;
+				const movable = buildUiKeys();
 				const currentIndex = movable.indexOf(key);
 				const nextIndex = currentIndex + direction;
 				if (currentIndex === -1 || nextIndex < 0 || nextIndex >= movable.length) return;
@@ -426,11 +469,11 @@ export default function (pi: ExtensionAPI) {
 					} else {
 						lines.push(frameLine(`Key: ${theme.bold(selectedKey)} ${theme.fg("dim", `• ${isBuiltinKey(selectedKey) ? "built-in" : "extension"}`)}`, safeWidth));
 						lines.push(frameLine(`State: ${selectedState} ${theme.fg("dim", `• list position ${selectedPosition} of ${keys.length}`)}`, safeWidth));
-						lines.push(frameLine(`Move: ${isBuiltinKey(selectedKey) ? theme.fg("dim", "fixed built-in position") : theme.fg("dim", "u/d reorders extension statuses")}`, safeWidth));
+						lines.push(frameLine(`Move: ${theme.fg("dim", "u/d reorders footer items")}`, safeWidth));
 					}
 
 					lines.push(sectionBorder("Controls", safeWidth));
-					lines.push(frameLine(theme.fg("dim", "↑↓ select  •  space/enter toggle  •  u/d move ext item"), safeWidth));
+					lines.push(frameLine(theme.fg("dim", "↑↓ select  •  space/enter toggle  •  u/d move item"), safeWidth));
 					lines.push(frameLine(theme.fg("dim", "r reset  •  esc close"), safeWidth));
 					lines.push(border("└", "─", "┘", safeWidth));
 
