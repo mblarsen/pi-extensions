@@ -22,7 +22,23 @@ interface FollowUpAnchor {
 	sessionId: string;
 	nodeId: string;
 	worktreeRoot: string;
+	messageTimestamp?: number;
+	assistantAfterNodeId?: string | null;
 }
+
+interface ActiveAssistantSnapshot {
+	sessionId: string;
+	timestamp: number;
+	text: string;
+}
+
+interface PendingAssistantTarget {
+	sessionId: string;
+	afterNodeId: string | null;
+	text: "";
+}
+
+type FollowUpTarget = ActiveAssistantSnapshot | PendingAssistantTarget;
 
 interface FollowUp {
 	id: string;
@@ -44,16 +60,15 @@ function oneLineSnippet(text: string, maxLength = 96): string {
 	return oneLine.length > maxLength ? `${oneLine.slice(0, maxLength - 1)}…` : oneLine;
 }
 
-function textFromEntry(entry: SessionEntry): string {
-	if (entry.type !== "message") return "";
-	const msg = entry.message as { role?: unknown; content?: unknown };
-	const content = msg.content;
+function textFromMessage(message: unknown): string {
+	if (!message || typeof message !== "object") return "";
+	const content = (message as { content?: unknown }).content;
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
 	return content
 		.map((part) => {
 			if (!part || typeof part !== "object") return "";
-			const block = part as { type?: unknown; text?: unknown; thinking?: unknown; toolCall?: unknown; name?: unknown; arguments?: unknown };
+			const block = part as { type?: unknown; text?: unknown; thinking?: unknown; name?: unknown };
 			if (block.type === "text" && typeof block.text === "string") return block.text;
 			if (block.type === "thinking" && typeof block.thinking === "string") return block.thinking;
 			if (block.type === "toolCall" && typeof block.name === "string") return `[tool call: ${block.name}]`;
@@ -61,6 +76,18 @@ function textFromEntry(entry: SessionEntry): string {
 		})
 		.filter(Boolean)
 		.join("\n");
+}
+
+function textFromEntry(entry: SessionEntry): string {
+	if (entry.type !== "message") return "";
+	return textFromMessage(entry.message);
+}
+
+function assistantSnapshotFromMessage(sessionId: string, message: unknown): ActiveAssistantSnapshot | undefined {
+	if (!message || typeof message !== "object") return undefined;
+	const msg = message as { role?: unknown; timestamp?: unknown };
+	if (msg.role !== "assistant" || typeof msg.timestamp !== "number") return undefined;
+	return { sessionId, timestamp: msg.timestamp, text: textFromMessage(message) };
 }
 
 function findWorktreeRoot(cwd: string): string | undefined {
@@ -171,26 +198,66 @@ function findLastAssistantEntry(ctx: ExtensionContext): SessionEntry | undefined
 	return undefined;
 }
 
-function buildAnchor(ctx: ExtensionContext): FollowUpAnchor | undefined {
-	const targetEntry = findLastAssistantEntry(ctx);
-	if (!targetEntry) return undefined;
+function findAssistantEntryByTimestamp(ctx: ExtensionContext, timestamp: number): SessionEntry | undefined {
+	const entries = ctx.sessionManager.getBranch();
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i];
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		if (entry.message.timestamp === timestamp) return entry;
+	}
+	return undefined;
+}
+
+function findAssistantEntryAfter(ctx: ExtensionContext, afterNodeId: string | null): SessionEntry | undefined {
+	const entries = ctx.sessionManager.getBranch();
+	const afterIndex = afterNodeId === null ? -1 : entries.findIndex((entry) => entry.id === afterNodeId);
+	if (afterNodeId !== null && afterIndex === -1) return undefined;
+	for (let i = afterIndex + 1; i < entries.length; i++) {
+		const entry = entries[i];
+		if (entry.type === "message" && entry.message.role === "assistant") return entry;
+	}
+	return undefined;
+}
+
+function entryForTarget(ctx: ExtensionContext, target: FollowUpTarget): SessionEntry | undefined {
+	return "timestamp" in target
+		? findAssistantEntryByTimestamp(ctx, target.timestamp)
+		: findAssistantEntryAfter(ctx, target.afterNodeId);
+}
+
+function pendingAnchorEntry(ctx: ExtensionContext, anchor: FollowUpAnchor): SessionEntry | undefined {
+	if (anchor.messageTimestamp !== undefined) return findAssistantEntryByTimestamp(ctx, anchor.messageTimestamp);
+	if ("assistantAfterNodeId" in anchor) return findAssistantEntryAfter(ctx, anchor.assistantAfterNodeId ?? null);
+	return undefined;
+}
+
+function buildAnchor(ctx: ExtensionContext, target?: FollowUpTarget): FollowUpAnchor | undefined {
+	const sessionId = ctx.sessionManager.getSessionId();
+	const currentTarget = target?.sessionId === sessionId ? target : undefined;
+	const targetEntry = currentTarget ? entryForTarget(ctx, currentTarget) : findLastAssistantEntry(ctx);
+	if (!targetEntry && !currentTarget) return undefined;
 	const worktreeRoot = findWorktreeRoot(ctx.cwd);
 	if (!worktreeRoot) return undefined;
 	return {
-		sessionId: ctx.sessionManager.getSessionId(),
-		nodeId: targetEntry.id,
+		sessionId,
+		nodeId: targetEntry?.id ?? "",
 		worktreeRoot,
+		messageTimestamp: !targetEntry && currentTarget && "timestamp" in currentTarget ? currentTarget.timestamp : undefined,
+		assistantAfterNodeId: !targetEntry && currentTarget && "afterNodeId" in currentTarget ? currentTarget.afterNodeId : undefined,
 	};
 }
 
-function buildContextText(ctx: ExtensionContext): string {
+function buildContextText(ctx: ExtensionContext, target?: FollowUpTarget): string {
+	const sessionId = ctx.sessionManager.getSessionId();
+	if (target?.sessionId === sessionId) {
+		const entry = entryForTarget(ctx, target);
+		return entry ? textFromEntry(entry) : target.text;
+	}
 	const targetEntry = findLastAssistantEntry(ctx);
-	if (!targetEntry) return "";
-	return textFromEntry(targetEntry);
+	return targetEntry ? textFromEntry(targetEntry) : "";
 }
 
-function buildContextSnippet(ctx: ExtensionContext): string {
-	const text = buildContextText(ctx);
+function contextSnippet(text: string): string {
 	const snippet = text.slice(0, SNIPPET_MAX_LEN);
 	return text.length > SNIPPET_MAX_LEN ? `${snippet}…` : snippet;
 }
@@ -222,6 +289,26 @@ async function refreshFollowUpFooterStatus(ctx: ExtensionContext): Promise<void>
 		return;
 	}
 	setFollowUpFooterStatus(ctx, await loadFollowUps(path));
+}
+
+async function resolvePendingFollowUpAnchors(ctx: ExtensionContext): Promise<void> {
+	const path = followUpsPath(ctx);
+	if (!path) return;
+	const items = await loadFollowUps(path);
+	let changed = false;
+	for (const item of items) {
+		if (item.anchor.nodeId || item.anchor.sessionId !== ctx.sessionManager.getSessionId()) continue;
+		const entry = pendingAnchorEntry(ctx, item.anchor);
+		if (!entry) continue;
+		const text = textFromEntry(entry);
+		item.anchor.nodeId = entry.id;
+		delete item.anchor.messageTimestamp;
+		delete item.anchor.assistantAfterNodeId;
+		item.contextText = text;
+		item.contextSnippet = contextSnippet(text);
+		changed = true;
+	}
+	if (changed) await saveFollowUps(path, items);
 }
 
 function markdownTheme(theme: import("@earendil-works/pi-coding-agent").Theme): MarkdownTheme {
@@ -540,30 +627,34 @@ class FollowUpListComponent {
 	}
 }
 
-async function recordFollowUp(ctx: ExtensionCommandContext): Promise<void> {
+async function recordFollowUp(ctx: ExtensionCommandContext, target?: FollowUpTarget): Promise<void> {
 	const path = followUpsPath(ctx);
 	if (!path) {
 		notify(ctx, "Could not determine repo root for follow-ups.", "error");
 		return;
 	}
 
-	if (!ctx.isIdle()) {
-		notify(ctx, "Press Escape to stop the current turn, then run /follow-up again.", "warning");
-		return;
-	}
-
-	const anchor = buildAnchor(ctx);
+	const anchor = buildAnchor(ctx, target);
 	if (!anchor) {
 		notify(ctx, "No message to anchor this follow-up to.", "error");
 		return;
 	}
 
-	const contextText = buildContextText(ctx);
-	const snippet = buildContextSnippet(ctx);
+	let contextText = buildContextText(ctx, target);
 	const message = await ctx.ui.editor("New follow-up", "");
 	if (message === undefined || message.trim() === "") {
 		notify(ctx, "Follow-up cancelled.", "info");
 		return;
+	}
+
+	if (!anchor.nodeId) {
+		const entry = pendingAnchorEntry(ctx, anchor);
+		if (entry) {
+			anchor.nodeId = entry.id;
+			delete anchor.messageTimestamp;
+			delete anchor.assistantAfterNodeId;
+			contextText = textFromEntry(entry);
+		}
 	}
 
 	const items = await loadFollowUps(path);
@@ -572,12 +663,13 @@ async function recordFollowUp(ctx: ExtensionCommandContext): Promise<void> {
 		createdAt: new Date().toISOString(),
 		message: message.trim(),
 		anchor,
-		contextSnippet: snippet,
+		contextSnippet: contextSnippet(contextText),
 		contextText,
 		done: false,
 	};
 	items.push(followUp);
 	await saveFollowUps(path, items);
+	await resolvePendingFollowUpAnchors(ctx);
 	setFollowUpFooterStatus(ctx, items);
 	notify(ctx, "Follow-up saved.", "info");
 }
@@ -591,11 +683,6 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 
 	if (ctx.mode !== "tui") {
 		notify(ctx, "/follow-up list requires interactive mode", "error");
-		return;
-	}
-
-	if (!ctx.isIdle()) {
-		notify(ctx, "Press Escape to stop the current turn, then run /follow-up list again.", "warning");
 		return;
 	}
 
@@ -700,11 +787,42 @@ async function listFollowUps(ctx: ExtensionCommandContext): Promise<void> {
 
 
 export default function (pi: ExtensionAPI) {
+	let agentRunActive = false;
+	let activeAssistantMessage: { sessionId: string; message: unknown } | undefined;
+
+	const trackAssistantMessage = (message: unknown, ctx: ExtensionContext): void => {
+		const snapshot = assistantSnapshotFromMessage(ctx.sessionManager.getSessionId(), message);
+		if (snapshot) activeAssistantMessage = { sessionId: snapshot.sessionId, message };
+	};
+
 	pi.on("session_start", async (_event, ctx) => {
+		agentRunActive = false;
+		activeAssistantMessage = undefined;
+		await resolvePendingFollowUpAnchors(ctx);
 		await refreshFollowUpFooterStatus(ctx);
 	});
 
+	pi.on("agent_start", () => {
+		agentRunActive = true;
+		activeAssistantMessage = undefined;
+	});
+
+	pi.on("message_start", (event, ctx) => trackAssistantMessage(event.message, ctx));
+	pi.on("message_update", (event, ctx) => trackAssistantMessage(event.message, ctx));
+	pi.on("message_end", (event, ctx) => trackAssistantMessage(event.message, ctx));
+
+	pi.on("turn_end", async (_event, ctx) => {
+		await resolvePendingFollowUpAnchors(ctx);
+	});
+
+	pi.on("agent_end", async (_event, ctx) => {
+		await resolvePendingFollowUpAnchors(ctx);
+		agentRunActive = false;
+		activeAssistantMessage = undefined;
+	});
+
 	pi.on("session_tree", async (_event, ctx) => {
+		await resolvePendingFollowUpAnchors(ctx);
 		await refreshFollowUpFooterStatus(ctx);
 	});
 
@@ -722,7 +840,16 @@ export default function (pi: ExtensionAPI) {
 				await listFollowUps(ctx);
 				return;
 			}
-			await recordFollowUp(ctx);
+			const target: FollowUpTarget | undefined = activeAssistantMessage
+				? assistantSnapshotFromMessage(activeAssistantMessage.sessionId, activeAssistantMessage.message)
+				: agentRunActive
+					? {
+						sessionId: ctx.sessionManager.getSessionId(),
+						afterNodeId: ctx.sessionManager.getLeafId(),
+						text: "",
+					}
+					: undefined;
+			await recordFollowUp(ctx, target);
 		},
 	});
 }

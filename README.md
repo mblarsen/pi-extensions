@@ -9,7 +9,7 @@ Personal extensions for the [Pi coding agent](https://github.com/earendil-works/
 | [continue-from](continue-from/) | Resume or nudge a stalled conversation. `/continue-from` with interactive picker + **Alt+C** keybinding. |
 | [fux](fux/) | Fork a session into a side tmux pane for tangential exploration, then merge back into same tree. |
 | [footer-manager](footer-manager/) | Toggle, reorder, and zen-mode the Pi status footer interactively. |
-| [follow-ups](follow-ups/) | Queue notes anchored to prior assistant messages and pop them into the chat input later. |
+| [follow-ups](follow-ups/) | Capture notes—even during an active response—anchored to assistant messages, then pop them into the chat input later. |
 | [slack-emojis](slack-emojis/) | Convert Slack/GitHub-style shortcodes like `:moon:` into emoji, with editor autocomplete. |
 | [update-changelog](update-changelog/) | Interactive changelog viewer and updater for installed Pi packages. |
 
