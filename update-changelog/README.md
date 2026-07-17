@@ -6,9 +6,7 @@ Detects available package updates asynchronously on startup, shows commit histor
 
 ## Demo
 
-![Update changelog package list](./demo1.png)
-
-![Update changelog detail view](./demo2.png)
+![demo](demo.gif)
 
 ## Install
 
