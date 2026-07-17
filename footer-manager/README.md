@@ -71,3 +71,7 @@ x
 - **builtin.stats** — token counts, cost, context usage
 - **builtin.model** — active model name
 - **Extension status items** — any status text registered by other extensions
+
+## Similar work
+
+- [pi-footer-manager](https://pi.dev/packages/pi-footer-manager) — a separate project with the same name
