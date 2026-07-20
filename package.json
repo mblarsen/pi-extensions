@@ -16,7 +16,8 @@
       "./update-changelog/index.ts",
       "./follow-ups/index.ts",
       "./slack-emojis/index.ts",
-      "./workmux-rename/index.ts"
+      "./workmux-rename/index.ts",
+      "./pi-observational-memory-leanctx-bridge/index.ts"
     ],
     "skills": [
       "./fux/fux-skill/SKILL.md"
