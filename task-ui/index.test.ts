@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import taskUiExtension, { TASK_UI_EVENTS } from "./index.ts";
+import { createInitialTaskUiState, createTasks, updateTask } from "./core.ts";
+import taskUiExtension, { blockerText, TASK_UI_EVENTS } from "./index.ts";
 
 type RegisteredTool = {
 	name: string;
@@ -59,6 +60,20 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 	assert.equal(lifecycleEvents.includes("before_agent_start"), false);
 	assert.equal(lifecycleEvents.includes("tool_call"), false);
 	assert.equal(lifecycleEvents.includes("agent_start"), false);
+});
+
+test("hides completed dependencies from blocker metadata", () => {
+	let state = createTasks(createInitialTaskUiState(), [
+		{ id: "done", subject: "Done", status: "completed" },
+		{ id: "active", subject: "Active", status: "in_progress" },
+		{ id: "target", subject: "Target", blockedBy: ["done", "active"] },
+	]).state;
+	let target = state.tasks.find((task) => task.id === "target")!;
+	assert.equal(blockerText(target, state.tasks), "› blocked by #2");
+
+	state = updateTask(state, { taskId: "active", status: "completed" }).state;
+	target = state.tasks.find((task) => task.id === "target")!;
+	assert.equal(blockerText(target, state.tasks), undefined);
 });
 
 test("batch creation, dashboard reads, and stopping stay within the UI projection", async () => {

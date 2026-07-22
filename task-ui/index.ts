@@ -171,14 +171,15 @@ function formatElapsed(startedAt: string | undefined, now: number): string | und
 	return hours > 0 ? `${hours}h ${minutes}m` : minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
-function blockerText(task: TaskRecord, tasks: TaskRecord[]): string | undefined {
+export function blockerText(task: TaskRecord, tasks: TaskRecord[]): string | undefined {
 	if (!task.blockedBy.length) return undefined;
 	const taskById = new Map(tasks.map((item) => [item.id, item]));
-	const blockers = task.blockedBy.map((id) => {
+	const blockers = task.blockedBy.flatMap((id) => {
 		const blocker = taskById.get(id);
-		return blocker ? `#${getTaskDisplayNumber(blocker, tasks)}` : id;
+		if (blocker?.status === "completed") return [];
+		return [blocker ? `#${getTaskDisplayNumber(blocker, tasks)}` : id];
 	});
-	return `› blocked by ${blockers.join(", ")}`;
+	return blockers.length ? `› blocked by ${blockers.join(", ")}` : undefined;
 }
 
 function taskLine(task: TaskRecord, tasks: TaskRecord[], focused: boolean, spinnerFrame: string, theme: Theme): string {
