@@ -12,6 +12,7 @@ Personal extensions for the [Pi coding agent](https://github.com/earendil-works/
 | [follow-ups](follow-ups/) | Capture notes—even during an active response—anchored to assistant messages, then pop them into the chat input later. |
 | [pi-observational-memory-leanctx-bridge](pi-observational-memory-leanctx-bridge/) | Index observational memories in Lean Context and persist exact cross-session evidence in SQLite-backed recall. |
 | [slack-emojis](slack-emojis/) | Convert Slack/GitHub-style shortcodes like `:moon:` into emoji, with editor autocomplete. |
+| [task-ui](task-ui/) | Backend-neutral task sidebar with presentation-only agent tools and `/task-ui` toggle. |
 | [update-changelog](update-changelog/) | Interactive changelog viewer and updater for installed Pi packages. |
 | [workmux-rename](workmux-rename/) | Rename the current workmux worktree and move the active Pi session with it. |
 
