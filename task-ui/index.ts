@@ -30,7 +30,7 @@ const STATE_ENTRY_TYPE = "task-ui-state";
 const OVERLAY_MIN_TERMINAL_WIDTH = 72;
 const MAX_VISIBLE_WORK_TASKS = 7;
 const MAX_VISIBLE_HISTORY_TASKS = 3;
-const SPINNER_FRAMES = ["✳", "✽"] as const;
+const SPINNER_FRAMES = ["✳", "✽", "•"] as const;
 const COMPLETED_ICON = "\x1b[38;2;34;197;94m✔\x1b[39m";
 
 export const TASK_UI_EVENTS = {
