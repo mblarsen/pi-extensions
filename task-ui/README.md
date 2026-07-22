@@ -20,7 +20,7 @@ The sidebar opens automatically as a non-capturing overlay on the right. Toggle 
 /task-ui
 ```
 
-The bar hides responsively below 72 terminal columns. Its `Tasks` panel shows numbered work, nested subtasks, blockers, terminal history, and projected execution telemetry without a summary or progress bar. Subtasks use stable hierarchical labels such as `#2.1` and `#2.1.1`. Active and pending work share one stable `tasks` list capped at seven visible items; overflow is summarized as `… and N more` while terminal work remains in `history`.
+The bar hides responsively below 72 terminal columns. Its `Tasks` panel shows numbered work, nested subtasks, blockers, terminal history, and projected execution telemetry without a summary or progress bar. Subtasks use stable hierarchical labels such as `#2.1` and `#2.1.1`. Active and pending work share one stable list capped at the first seven items, so the earliest work retains priority; overflow is summarized as `… and N more`. `history` shows only the latest three terminal tasks.
 
 | Icon | Meaning |
 |---|---|
