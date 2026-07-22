@@ -26,9 +26,12 @@ Give each task:
 
 - a concise outcome-oriented `subject`
 - the backend task ID as `id` when mirroring a backend
+- an optional short `label` when a meaningful category or workflow applies, such as `research` or `grilling`; do not add brackets
 - `parent_id` when the task is a subtask
 - `blocked_by` IDs for real dependencies
 - `pending` status until work begins
+
+Labels render right-aligned. The same label receives the same theme-derived color everywhere; omit the label rather than inventing a meaningless category.
 
 Do not invent dependencies, progress, token counts, or backend IDs.
 
@@ -43,7 +46,7 @@ Parents remain independently executable tasks:
 - completing, failing, or stopping a parent does not change its children
 - `blocked_by` expresses execution dependencies; `parent_id` expresses hierarchy only
 
-Use `task_ui_update` with `parent_id: null` to detach a subtask and make it a root task. Do not create parent cycles.
+Use `task_ui_update` with `parent_id: null` to detach a subtask and make it a root task. Pass an empty `label` to clear an existing label. Do not create parent cycles.
 
 ## Mirror execution
 
@@ -52,6 +55,7 @@ Before actively executing a task, call `task_ui_update` with:
 ```json
 {
   "task_id": "backend-or-ui-id",
+  "label": "verification",
   "status": "in_progress",
   "executing": true,
   "active_form": "Running regression tests…"

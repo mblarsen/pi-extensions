@@ -24,21 +24,24 @@ describe("task-ui projection", () => {
 		const result = createTask(createInitialTaskUiState(), {
 			id: "backend-42",
 			subject: "Run backend task",
+			label: "research",
 			status: "in_progress",
 		}, NOW);
 
 		assert.equal(result.task.id, "backend-42");
 		assert.equal(result.state.focusedTaskId, "backend-42");
 		assert.equal(result.task.status, "in_progress");
+		assert.equal(result.task.label, "research");
 		assert.deepEqual(result.task.output, []);
 	});
 
 	test("updates presentation state and advances focus after completion", () => {
 		let state = createTask(createInitialTaskUiState(), { id: "one", subject: "First", status: "in_progress" }, NOW).state;
 		state = createTask(state, { id: "two", subject: "Second" }, NOW).state;
-		state = updateTask(state, { taskId: "one", status: "completed", progress: 100 }, LATER).state;
+		state = updateTask(state, { taskId: "one", label: "grilling", status: "completed", progress: 100 }, LATER).state;
 
 		assert.equal(state.tasks[0].status, "completed");
+		assert.equal(state.tasks[0].label, "grilling");
 		assert.equal(state.tasks[0].progress, 100);
 		assert.equal(state.focusedTaskId, "two");
 	});
@@ -160,6 +163,7 @@ describe("task-ui projection", () => {
 			{
 				id: "ctx-7",
 				title: "Delegated review",
+				label: "review",
 				status: "running",
 				output: [{ text: "started", timestamp: NOW }],
 			},
@@ -170,6 +174,7 @@ describe("task-ui projection", () => {
 
 		assert.equal(parent?.subject, "Delegated review");
 		assert.equal(parent?.status, "in_progress");
+		assert.equal(parent?.label, "review");
 		assert.deepEqual(parent?.output, [{ text: "started", timestamp: NOW }]);
 		assert.equal(child?.parentId, "ctx-7");
 		assert.equal(getTaskDisplayNumber(child!, restored!.tasks), "1.1");

@@ -22,7 +22,7 @@ The sidebar opens automatically as a non-capturing overlay on the right. Toggle 
 /task-ui
 ```
 
-The bar hides responsively below 72 terminal columns. Its `Tasks` panel shows numbered work, nested subtasks, blockers, terminal history, and projected execution telemetry without a summary or progress bar. Subtasks use stable hierarchical labels such as `#2.1` and `#2.1.1` and render immediately beneath their parent in subtask order. Active and pending work share one stable list capped at the first seven items, so the earliest work retains priority; overflow is summarized as `… and N more`. `history` shows the latest three terminal transitions newest-first and does not reorder them after metadata or output edits. When only history remains, a muted `All done!` message appears above it.
+The bar hides responsively below 72 terminal columns. Its `Tasks` panel shows numbered work, nested subtasks, blockers, terminal history, optional right-aligned labels, and projected execution telemetry without a summary or progress bar. Subtasks use stable hierarchical labels such as `#2.1` and `#2.1.1` and render immediately beneath their parent in subtask order. Active and pending work share one stable list capped at the first seven items, so the earliest work retains priority; overflow is summarized as `… and N more`. `history` shows the latest three terminal transitions newest-first and does not reorder them after metadata or output edits. When only history remains, a muted `All done!` message appears above it.
 
 | Icon | Meaning |
 |---|---|
@@ -35,17 +35,19 @@ The bar hides responsively below 72 terminal columns. Its `Tasks` panel shows nu
 
 `executing` is transient presentation metadata layered over `in_progress`, so several tasks may execute concurrently.
 
+Tasks may carry one short `label`, such as `grilling` or `research`. Labels render in brackets at the right edge while the task title truncates first. Label colors are selected deterministically from the active theme: the same label is always the same color, while different labels spread across the available palette.
+
 Parents are independently executable. Their status and progress are not derived from subtasks, and terminal parent transitions never modify child state. Hierarchy (`parent_id`) and execution dependencies (`blocked_by`) are separate concepts.
 
 ## Presentation tools
 
 | Tool | UI-only behavior |
 |---|---|
-| `task_ui_create` | Add or mirror one numbered root task or subtask |
+| `task_ui_create` | Add or mirror one numbered root task or subtask, optionally with a label |
 | `task_ui_batch_create` | Atomically add or mirror several tasks, including nested hierarchies |
 | `task_ui_list` | List projected tasks, optionally filtered by status |
 | `task_ui_get` | Read one task; without `task_id`, return active, next, and focused tasks |
-| `task_ui_update` | Update status, blockers, focus-driving state, progress, and execution telemetry |
+| `task_ui_update` | Update the label, status, blockers, focus-driving state, progress, and execution telemetry |
 | `task_ui_output` | Append, read, or clear projected output |
 | `task_ui_remove` | Remove one projected task and detach its children as root tasks |
 | `task_ui_clear` | Clear the entire projection |
@@ -59,6 +61,7 @@ The bundled `task-ui` Agent Skill teaches the agent when to create task sets, mi
 
 Create and update operations accept:
 
+- `label`: short category or workflow text rendered right-aligned; pass it without brackets
 - `parent_id`: nests a task under an independently executable parent
 - `executing`: enables the animated execution state
 - `active_form`: present-progress text such as `Acquiring plutonium…`
@@ -85,7 +88,7 @@ Other Pi extensions can update the projection through `pi.events`:
 ```ts
 pi.events.emit("task-ui:snapshot", {
   tasks: [
-    { id: "worker-1", subject: "Review API", status: "running" },
+    { id: "worker-1", subject: "Review API", label: "research", status: "running" },
     {
       id: "worker-2",
       subject: "Run tests",
@@ -104,6 +107,7 @@ pi.events.emit("task-ui:snapshot", {
 
 pi.events.emit("task-ui:upsert", {
   id: "worker-2",
+  label: "verification",
   status: "completed",
   executing: false,
   progress: 100,

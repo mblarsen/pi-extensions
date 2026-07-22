@@ -1,4 +1,4 @@
-export const TASK_UI_STATE_VERSION = 4 as const;
+export const TASK_UI_STATE_VERSION = 5 as const;
 
 export const TASK_STATUSES = ["pending", "in_progress", "completed", "failed", "stopped"] as const;
 export const MAX_TASK_OUTPUT_CHARS = 2_000;
@@ -16,6 +16,7 @@ export interface TaskRecord {
 	number: number;
 	subject: string;
 	description?: string;
+	label?: string;
 	status: TaskStatus;
 	progress?: number;
 	owner?: string;
@@ -46,6 +47,7 @@ export interface CreateTaskInput {
 	number?: number;
 	subject: string;
 	description?: string;
+	label?: string;
 	status?: TaskStatus;
 	progress?: number;
 	owner?: string;
@@ -63,6 +65,7 @@ export interface UpdateTaskInput {
 	taskId: string;
 	subject?: string;
 	description?: string;
+	label?: string;
 	status?: TaskStatus;
 	progress?: number;
 	owner?: string;
@@ -82,6 +85,7 @@ export interface ExternalTaskInput {
 	title?: string;
 	name?: string;
 	description?: string;
+	label?: string;
 	status?: string;
 	progress?: number;
 	owner?: string;
@@ -319,6 +323,7 @@ export function createTask(
 		number: numbering.number,
 		subject,
 		description: cleanOptional(input.description),
+		label: cleanOptional(input.label),
 		status,
 		progress: clampProgress(input.progress),
 		owner: cleanOptional(input.owner),
@@ -414,6 +419,7 @@ export function updateTask(
 		...current,
 		subject,
 		description: input.description === undefined ? current.description : cleanOptional(input.description),
+		label: input.label === undefined ? current.label : cleanOptional(input.label),
 		status,
 		progress: input.progress === undefined ? current.progress : clampProgress(input.progress),
 		owner: input.owner === undefined ? current.owner : cleanOptional(input.owner),
@@ -487,6 +493,7 @@ export function upsertExternalTask(
 			number: input.number,
 			subject: input.subject ?? input.title ?? input.name ?? input.id,
 			description: input.description,
+			label: input.label,
 			status: normalizeTaskStatus(input.status),
 			progress: input.progress,
 			owner: input.owner,
@@ -513,6 +520,7 @@ export function upsertExternalTask(
 		taskId: input.id,
 		subject: input.subject ?? input.title ?? input.name,
 		description: input.description,
+		label: input.label,
 		status: input.status === undefined ? undefined : normalizeTaskStatus(input.status),
 		progress: input.progress,
 		owner: input.owner,

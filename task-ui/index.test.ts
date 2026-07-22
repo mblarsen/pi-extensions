@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createInitialTaskUiState, createTasks, updateTask } from "./core.ts";
-import taskUiExtension, { blockerText, orderTasksForDisplay, TaskBarComponent, TASK_UI_EVENTS } from "./index.ts";
+import taskUiExtension, { blockerText, orderTasksForDisplay, TaskBarComponent, TASK_UI_EVENTS, taskLabelColor } from "./index.ts";
 
 type RegisteredTool = {
 	name: string;
@@ -115,6 +115,35 @@ test("renders newest history tasks first at the same indentation level", () => {
 	assert.match(lines[5], /^│ ✔ #1 Parent/);
 });
 
+test("right-aligns labels and assigns stable distinct theme colors", () => {
+	const state = createTasks(createInitialTaskUiState(), [
+		{ id: "grill", subject: "Stress-test the plan", label: "grilling" },
+		{ id: "research", subject: "Gather primary sources", label: "research" },
+	]).state;
+	const styled: Array<[string, string]> = [];
+	const theme = {
+		fg: (color: string, text: string) => {
+			styled.push([color, text]);
+			return text;
+		},
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const width = 60;
+	const lines = new TaskBarComponent(() => state, () => "✳", theme as never).render(width);
+
+	assert.equal(lines[1].length, width);
+	assert.equal(lines[2].length, width);
+	assert.equal(lines[1].indexOf("]"), width - 3);
+	assert.equal(lines[2].indexOf("]"), width - 3);
+	assert.match(lines[1], /\[grilling\] │$/);
+	assert.match(lines[2], /\[research\] │$/);
+	assert.equal(taskLabelColor("grilling"), taskLabelColor("GRILLING"));
+	assert.notEqual(taskLabelColor("grilling"), taskLabelColor("research"));
+	assert.ok(styled.some(([color, text]) => color === taskLabelColor("grilling") && text === "[grilling]"));
+	assert.ok(styled.some(([color, text]) => color === taskLabelColor("research") && text === "[research]"));
+});
+
 test("hides completed dependencies from blocker metadata", () => {
 	let state = createTasks(createInitialTaskUiState(), [
 		{ id: "done", subject: "Done", status: "completed" },
@@ -136,7 +165,7 @@ test("batch creation, dashboard reads, stopping, and deletion stay within the UI
 
 	await tool("task_ui_batch_create").execute("batch", {
 		tasks: [
-			{ id: "one", subject: "One", status: "in_progress", executing: true },
+			{ id: "one", subject: "One", label: "grilling", status: "in_progress", executing: true },
 			{ id: "two", subject: "Two", status: "in_progress" },
 			{ id: "three", subject: "Three" },
 		],
@@ -144,6 +173,12 @@ test("batch creation, dashboard reads, stopping, and deletion stay within the UI
 	const dashboard = await tool("task_ui_get").execute("get", {});
 	assert.match(dashboard.content[0].text, /Active \(2\)/);
 	assert.match(dashboard.content[0].text, /Next: #3/);
+
+	const labeled = await tool("task_ui_get").execute("get-labeled", { task_id: "one" });
+	assert.match(labeled.content[0].text, /Label: grilling/);
+	await tool("task_ui_update").execute("label-two", { task_id: "two", label: "research" });
+	const relabeled = await tool("task_ui_get").execute("get-relabeled", { task_id: "two" });
+	assert.match(relabeled.content[0].text, /Label: research/);
 
 	const stopped = await tool("task_ui_stop").execute("stop", { task_id: "one", reason: "User stopped display" });
 	assert.match(stopped.content[0].text, /stopped UI history/);

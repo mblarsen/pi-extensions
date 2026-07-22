@@ -32,6 +32,7 @@ const MAX_VISIBLE_WORK_TASKS = 7;
 const MAX_VISIBLE_HISTORY_TASKS = 3;
 const SPINNER_FRAMES = ["✳", "✽", "•"] as const;
 const COMPLETED_ICON = "\x1b[38;2;34;197;94m✔\x1b[39m";
+const LABEL_COLORS = ["accent", "mdLink", "syntaxType", "syntaxFunction", "syntaxString", "syntaxNumber", "syntaxKeyword", "syntaxVariable"] as const;
 
 export const TASK_UI_EVENTS = {
 	snapshot: "task-ui:snapshot",
@@ -57,6 +58,7 @@ type AgentTaskInput = {
 	id?: string;
 	subject: string;
 	description?: string;
+	label?: string;
 	status?: (typeof TASK_STATUSES)[number];
 	progress?: number;
 	owner?: string;
@@ -74,6 +76,7 @@ function toCreateTaskInput(input: AgentTaskInput): CreateTaskInput {
 		id: input.id,
 		subject: input.subject,
 		description: input.description,
+		label: input.label,
 		status: input.status,
 		progress: input.progress,
 		owner: input.owner,
@@ -92,6 +95,7 @@ function createTaskSchema() {
 		id: Type.Optional(Type.String({ description: "Backend task ID to mirror; generated when omitted" })),
 		subject: Type.String({ description: "Short task title" }),
 		description: Type.Optional(Type.String()),
+		label: Type.Optional(Type.String({ description: "Short right-aligned label, without brackets" })),
 		status: Type.Optional(StringEnum(TASK_STATUSES)),
 		progress: Type.Optional(Type.Number({ minimum: 0, maximum: 100 })),
 		owner: Type.Optional(Type.String()),
@@ -107,12 +111,14 @@ function createTaskSchema() {
 
 function taskSummary(task: TaskRecord): string {
 	const execution = task.executing ? ", executing" : "";
-	return `#${task.number} [${task.status}${execution}] ${task.id} — ${task.subject}`;
+	const label = task.label ? ` [${task.label}]` : "";
+	return `#${task.number} [${task.status}${execution}] ${task.id} — ${task.subject}${label}`;
 }
 
 function taskDetails(task: TaskRecord): string {
 	const lines = [taskSummary(task)];
 	if (task.description) lines.push(task.description);
+	if (task.label) lines.push(`Label: ${task.label}`);
 	if (task.progress !== undefined) lines.push(`Progress: ${task.progress}%`);
 	if (task.owner) lines.push(`Owner: ${task.owner}`);
 	if (task.parentId) lines.push(`Parent: ${task.parentId}`);
@@ -144,6 +150,29 @@ function fit(text: string, width: number, theme: Theme): string {
 function framedRow(text: string, width: number, theme: Theme): string {
 	if (width < 2) return truncateToWidth(text, width, "");
 	return theme.fg("borderMuted", "│") + fit(` ${text}`, width - 2, theme) + theme.fg("borderMuted", "│");
+}
+
+export function taskLabelColor(label: string): (typeof LABEL_COLORS)[number] {
+	let hash = 2_166_136_261;
+	for (const character of label.toLowerCase()) {
+		hash ^= character.codePointAt(0) ?? 0;
+		hash = Math.imul(hash, 16_777_619);
+	}
+	return LABEL_COLORS[(hash >>> 0) % LABEL_COLORS.length];
+}
+
+function framedTaskRow(text: string, label: string | undefined, width: number, theme: Theme): string {
+	if (!label || width < 10) return framedRow(text, width, theme);
+	const innerWidth = width - 2;
+	const maxBadgeWidth = Math.min(Math.floor(innerWidth * 0.4), innerWidth - 6);
+	if (maxBadgeWidth < 3) return framedRow(text, width, theme);
+	const labelText = truncateToWidth(label, maxBadgeWidth - 2, "…");
+	const badge = `[${labelText}]`;
+	const leftWidth = innerWidth - visibleWidth(badge) - 3;
+	if (leftWidth < 1) return framedRow(text, width, theme);
+	return theme.fg("borderMuted", "│")
+		+ ` ${fit(text, leftWidth, theme)} ${theme.fg(taskLabelColor(label), badge)} `
+		+ theme.fg("borderMuted", "│");
 }
 
 function divider(label: string, width: number, theme: Theme): string {
@@ -285,7 +314,7 @@ export class TaskBarComponent {
 		if (tasks.length > 0) {
 			if (work.length) {
 				for (const task of work.slice(0, MAX_VISIBLE_WORK_TASKS)) {
-					lines.push(framedRow(taskLine(task, tasks, task.id === state.focusedTaskId, this.getSpinnerFrame(), this.theme), width, this.theme));
+					lines.push(framedTaskRow(taskLine(task, tasks, task.id === state.focusedTaskId, this.getSpinnerFrame(), this.theme), task.label, width, this.theme));
 					const metadata = taskMetadata(task, tasks, this.theme);
 					if (metadata) lines.push(framedRow(metadata, width, this.theme));
 				}
@@ -297,7 +326,7 @@ export class TaskBarComponent {
 				if (!work.length) lines.push(framedRow(this.theme.fg("muted", "All done!"), width, this.theme));
 				lines.push(divider("history", width, this.theme));
 				for (const task of history.slice(0, MAX_VISIBLE_HISTORY_TASKS)) {
-					lines.push(framedRow(taskLine(task, tasks, false, this.getSpinnerFrame(), this.theme, false), width, this.theme));
+					lines.push(framedTaskRow(taskLine(task, tasks, false, this.getSpinnerFrame(), this.theme, false), task.label, width, this.theme));
 				}
 			}
 		}
@@ -508,6 +537,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 			task_id: Type.String(),
 			subject: Type.Optional(Type.String()),
 			description: Type.Optional(Type.String()),
+			label: Type.Optional(Type.String({ description: "Short right-aligned label, without brackets; empty string clears it" })),
 			status: Type.Optional(StringEnum(TASK_STATUSES)),
 			progress: Type.Optional(Type.Number({ minimum: 0, maximum: 100 })),
 			owner: Type.Optional(Type.String()),
@@ -524,6 +554,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 				taskId: params.task_id,
 				subject: params.subject,
 				description: params.description,
+				label: params.label,
 				status: params.status,
 				progress: params.progress,
 				owner: params.owner,
