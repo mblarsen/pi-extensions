@@ -161,7 +161,7 @@ export function taskLabelColor(label: string): (typeof LABEL_COLORS)[number] {
 	return LABEL_COLORS[(hash >>> 0) % LABEL_COLORS.length];
 }
 
-function framedTaskRow(text: string, label: string | undefined, width: number, theme: Theme): string {
+function framedTaskRow(text: string, label: string | undefined, width: number, theme: Theme, dimLabel = false): string {
 	if (!label || width < 10) return framedRow(text, width, theme);
 	const innerWidth = width - 2;
 	const maxBadgeWidth = Math.min(Math.floor(innerWidth * 0.4), innerWidth - 6);
@@ -170,8 +170,9 @@ function framedTaskRow(text: string, label: string | undefined, width: number, t
 	const badge = `[${labelText}]`;
 	const leftWidth = innerWidth - visibleWidth(badge) - 3;
 	if (leftWidth < 1) return framedRow(text, width, theme);
+	const labelColor = dimLabel ? "dim" : taskLabelColor(label);
 	return theme.fg("borderMuted", "│")
-		+ ` ${fit(text, leftWidth, theme)} ${theme.fg(taskLabelColor(label), badge)} `
+		+ ` ${fit(text, leftWidth, theme)} ${theme.fg(labelColor, badge)} `
 		+ theme.fg("borderMuted", "│");
 }
 
@@ -326,7 +327,13 @@ export class TaskBarComponent {
 				if (!work.length) lines.push(framedRow(this.theme.fg("muted", "All done!"), width, this.theme));
 				lines.push(divider("history", width, this.theme));
 				for (const task of history.slice(0, MAX_VISIBLE_HISTORY_TASKS)) {
-					lines.push(framedTaskRow(taskLine(task, tasks, false, this.getSpinnerFrame(), this.theme, false), task.label, width, this.theme));
+					lines.push(framedTaskRow(
+						taskLine(task, tasks, false, this.getSpinnerFrame(), this.theme, false),
+						task.label,
+						width,
+						this.theme,
+						task.status === "completed",
+					));
 				}
 			}
 		}
