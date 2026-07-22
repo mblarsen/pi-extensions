@@ -9,7 +9,12 @@ The bridge does not modify or import code from `pi-observational-memory`. It rec
 
 ## Requirements
 
-Both packages must be installed, the `lean-ctx` executable must be available on `PATH`, and Pi must run on Node.js 22.5 or newer for the built-in `node:sqlite` module:
+This bridge does not work standalone. Both of these Pi extensions must also be installed and enabled:
+
+1. [`pi-observational-memory`](https://github.com/elpapi42/pi-observational-memory), which creates the observations, reflections, and source provenance;
+2. [`pi-lean-ctx`](https://www.npmjs.com/package/pi-lean-ctx), which provides the Lean Context knowledge tools and CLI integration.
+
+Installing only this bridge will not provide observational memory or Lean Context. The `lean-ctx` executable must also be available on `PATH`, and Pi must run on Node.js 22.5 or newer for the built-in `node:sqlite` module. A complete package configuration is:
 
 ```json
 {
