@@ -171,6 +171,35 @@ function formatElapsed(startedAt: string | undefined, now: number): string | und
 	return hours > 0 ? `${hours}h ${minutes}m` : minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
+export function orderTasksForDisplay(tasks: TaskRecord[]): TaskRecord[] {
+	const includedIds = new Set(tasks.map((task) => task.id));
+	const children = new Map<string, TaskRecord[]>();
+	const roots: TaskRecord[] = [];
+
+	for (const task of tasks) {
+		if (task.parentId && includedIds.has(task.parentId)) {
+			const siblings = children.get(task.parentId) ?? [];
+			siblings.push(task);
+			children.set(task.parentId, siblings);
+		} else {
+			roots.push(task);
+		}
+	}
+
+	const byNumber = (left: TaskRecord, right: TaskRecord) =>
+		(left.subtaskNumber ?? left.number) - (right.subtaskNumber ?? right.number) || left.number - right.number;
+	roots.sort((left, right) => left.number - right.number);
+	for (const siblings of children.values()) siblings.sort(byNumber);
+
+	const ordered: TaskRecord[] = [];
+	const visit = (task: TaskRecord) => {
+		ordered.push(task);
+		for (const child of children.get(task.id) ?? []) visit(child);
+	};
+	for (const root of roots) visit(root);
+	return ordered;
+}
+
 export function blockerText(task: TaskRecord, tasks: TaskRecord[]): string | undefined {
 	if (!task.blockedBy.length) return undefined;
 	const taskById = new Map(tasks.map((item) => [item.id, item]));
@@ -238,7 +267,7 @@ class TaskBarComponent {
 	render(width: number): string[] {
 		const state = this.getState();
 		const tasks = state.tasks;
-		const work = tasks.filter((task) => task.status === "in_progress" || task.status === "pending");
+		const work = orderTasksForDisplay(tasks.filter((task) => task.status === "in_progress" || task.status === "pending"));
 		const history = tasks.filter((task) => ["completed", "failed", "stopped"].includes(task.status));
 		const topTitle = " Tasks ";
 		const topFill = Math.max(0, width - visibleWidth(topTitle) - 2);

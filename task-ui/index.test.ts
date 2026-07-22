@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createInitialTaskUiState, createTasks, updateTask } from "./core.ts";
-import taskUiExtension, { blockerText, TASK_UI_EVENTS } from "./index.ts";
+import taskUiExtension, { blockerText, orderTasksForDisplay, TASK_UI_EVENTS } from "./index.ts";
 
 type RegisteredTool = {
 	name: string;
@@ -60,6 +60,26 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 	assert.equal(lifecycleEvents.includes("before_agent_start"), false);
 	assert.equal(lifecycleEvents.includes("tool_call"), false);
 	assert.equal(lifecycleEvents.includes("agent_start"), false);
+});
+
+test("renders descendants immediately after their parent", () => {
+	const state = createTasks(createInitialTaskUiState(), [
+		{ id: "parent", subject: "Parent" },
+		{ id: "other", subject: "Other root" },
+		{ id: "child-one", subject: "First child", parentId: "parent" },
+		{ id: "child-two", subject: "Second child", parentId: "parent" },
+		{ id: "grandchild", subject: "Grandchild", parentId: "child-one" },
+	]).state;
+	const byId = new Map(state.tasks.map((task) => [task.id, task]));
+	const scrambled = ["parent", "other", "child-two", "grandchild", "child-one"].map((id) => byId.get(id)!);
+
+	assert.deepEqual(orderTasksForDisplay(scrambled).map((task) => task.id), [
+		"parent",
+		"child-one",
+		"grandchild",
+		"child-two",
+		"other",
+	]);
 });
 
 test("hides completed dependencies from blocker metadata", () => {
