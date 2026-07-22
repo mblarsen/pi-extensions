@@ -211,7 +211,14 @@ export function blockerText(task: TaskRecord, tasks: TaskRecord[]): string | und
 	return blockers.length ? `› blocked by ${blockers.join(", ")}` : undefined;
 }
 
-function taskLine(task: TaskRecord, tasks: TaskRecord[], focused: boolean, spinnerFrame: string, theme: Theme): string {
+function taskLine(
+	task: TaskRecord,
+	tasks: TaskRecord[],
+	focused: boolean,
+	spinnerFrame: string,
+	theme: Theme,
+	showHierarchy = true,
+): string {
 	let glyph: string;
 	let label = task.subject;
 	if (task.executing) {
@@ -227,7 +234,7 @@ function taskLine(task: TaskRecord, tasks: TaskRecord[], focused: boolean, spinn
 		}
 	}
 
-	const indent = "  ".repeat(getTaskDepth(task, tasks));
+	const indent = showHierarchy ? "  ".repeat(getTaskDepth(task, tasks)) : "";
 	const taskLabel = `#${getTaskDisplayNumber(task, tasks)} ${label}`;
 	if (task.status === "completed") {
 		return `${indent}${COMPLETED_ICON} ${theme.fg("dim", theme.strikethrough(taskLabel))}`;
@@ -253,7 +260,7 @@ function taskMetadata(task: TaskRecord, tasks: TaskRecord[], theme: Theme): stri
 	return blocked ? theme.fg("dim", `${indent}${blocked}`) : undefined;
 }
 
-class TaskBarComponent {
+export class TaskBarComponent {
 	private readonly getState: () => TaskUiState;
 	private readonly getSpinnerFrame: () => string;
 	private readonly theme: Theme;
@@ -268,7 +275,9 @@ class TaskBarComponent {
 		const state = this.getState();
 		const tasks = state.tasks;
 		const work = orderTasksForDisplay(tasks.filter((task) => task.status === "in_progress" || task.status === "pending"));
-		const history = tasks.filter((task) => ["completed", "failed", "stopped"].includes(task.status));
+		const history = tasks
+			.filter((task) => ["completed", "failed", "stopped"].includes(task.status))
+			.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.number - left.number);
 		const topTitle = " Tasks ";
 		const topFill = Math.max(0, width - visibleWidth(topTitle) - 2);
 		const lines = [this.theme.fg("borderMuted", `╭${topTitle}${"─".repeat(topFill)}╮`)];
@@ -285,9 +294,10 @@ class TaskBarComponent {
 				}
 			}
 			if (history.length) {
+				if (!work.length) lines.push(framedRow(this.theme.fg("muted", "All done!"), width, this.theme));
 				lines.push(divider("history", width, this.theme));
-				for (const task of history.slice(-MAX_VISIBLE_HISTORY_TASKS)) {
-					lines.push(framedRow(taskLine(task, tasks, false, this.getSpinnerFrame(), this.theme), width, this.theme));
+				for (const task of history.slice(0, MAX_VISIBLE_HISTORY_TASKS)) {
+					lines.push(framedRow(taskLine(task, tasks, false, this.getSpinnerFrame(), this.theme, false), width, this.theme));
 				}
 			}
 		}

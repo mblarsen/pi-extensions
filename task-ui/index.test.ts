@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createInitialTaskUiState, createTasks, updateTask } from "./core.ts";
-import taskUiExtension, { blockerText, orderTasksForDisplay, TASK_UI_EVENTS } from "./index.ts";
+import taskUiExtension, { blockerText, orderTasksForDisplay, TaskBarComponent, TASK_UI_EVENTS } from "./index.ts";
 
 type RegisteredTool = {
 	name: string;
@@ -80,6 +81,35 @@ test("renders descendants immediately after their parent", () => {
 		"child-two",
 		"other",
 	]);
+});
+
+test("renders newest history tasks first at the same indentation level", () => {
+	let state = createTasks(createInitialTaskUiState(), [
+		{ id: "parent", subject: "Parent" },
+		{ id: "root", subject: "Root" },
+		{ id: "child", subject: "Child", parentId: "parent" },
+	], "2026-01-01T10:00:00.000Z").state;
+	state = updateTask(state, { taskId: "parent", status: "completed" }, "2026-01-01T10:01:00.000Z").state;
+	state = updateTask(state, { taskId: "child", status: "completed" }, "2026-01-01T10:02:00.000Z").state;
+	state = updateTask(state, { taskId: "root", status: "completed" }, "2026-01-01T10:03:00.000Z").state;
+	const styled: Array<[string, string]> = [];
+	const theme = {
+		fg: (color: string, text: string) => {
+			styled.push([color, text]);
+			return text;
+		},
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const lines = new TaskBarComponent(() => state, () => "✳", theme as never)
+		.render(60)
+		.map(stripVTControlCharacters);
+
+	assert.match(lines[1], /^│ All done!/);
+	assert.ok(styled.some(([color, text]) => color === "muted" && text === "All done!"));
+	assert.match(lines[3], /^│ ✔ #2 Root/);
+	assert.match(lines[4], /^│ ✔ #1\.1 Child/);
+	assert.match(lines[5], /^│ ✔ #1 Parent/);
 });
 
 test("hides completed dependencies from blocker metadata", () => {
