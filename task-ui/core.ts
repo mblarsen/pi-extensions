@@ -1,4 +1,4 @@
-export const TASK_UI_STATE_VERSION = 3 as const;
+export const TASK_UI_STATE_VERSION = 4 as const;
 
 export const TASK_STATUSES = ["pending", "in_progress", "completed", "failed", "stopped"] as const;
 export const MAX_TASK_OUTPUT_CHARS = 2_000;
@@ -29,6 +29,7 @@ export interface TaskRecord {
 	outputTokens?: number;
 	createdAt: string;
 	updatedAt: string;
+	terminalAt?: string;
 	output: TaskOutputEntry[];
 }
 
@@ -94,6 +95,7 @@ export interface ExternalTaskInput {
 	outputTokens?: number;
 	createdAt?: string;
 	updatedAt?: string;
+	terminalAt?: string;
 	output?: Array<TaskOutputEntry | string>;
 }
 
@@ -330,6 +332,7 @@ export function createTask(
 		outputTokens: clampTokens(input.outputTokens),
 		createdAt: now,
 		updatedAt: now,
+		terminalAt: isTerminal(status) ? now : undefined,
 		output: [],
 	};
 	const tasks = [...state.tasks.map(cloneTask), task];
@@ -404,6 +407,9 @@ export function updateTask(
 		? cleanOptional(input.startedAt)
 		: executing && !current.executing ? now : current.startedAt;
 	const parent = resolveParentUpdate(tasks, current, input.parentId);
+	const terminalAt = isTerminal(status)
+		? isTerminal(current.status) ? current.terminalAt ?? current.updatedAt : now
+		: undefined;
 	const updated: TaskRecord = {
 		...current,
 		subject,
@@ -420,6 +426,7 @@ export function updateTask(
 		inputTokens: input.inputTokens === undefined ? current.inputTokens : clampTokens(input.inputTokens),
 		outputTokens: input.outputTokens === undefined ? current.outputTokens : clampTokens(input.outputTokens),
 		updatedAt: now,
+		terminalAt,
 	};
 	tasks[index] = updated;
 	const requestedFocus = executing || status === "in_progress" ? updated.id : state.focusedTaskId;
@@ -493,7 +500,12 @@ export function upsertExternalTask(
 			outputTokens: input.outputTokens,
 		}, input.createdAt ?? now);
 		const output = normalizeOutput(input.output ?? [], now);
-		const tasks = result.state.tasks.map((task) => task.id === input.id ? { ...task, updatedAt: input.updatedAt ?? task.updatedAt, output } : task);
+		const tasks = result.state.tasks.map((task) => task.id === input.id ? {
+			...task,
+			updatedAt: input.updatedAt ?? task.updatedAt,
+			terminalAt: isTerminal(task.status) ? input.terminalAt ?? input.updatedAt ?? task.terminalAt : undefined,
+			output,
+		} : task);
 		return { state: { ...result.state, tasks }, task: cloneTask(tasks.find((task) => task.id === input.id)!) };
 	}
 
@@ -512,9 +524,13 @@ export function upsertExternalTask(
 		inputTokens: input.inputTokens,
 		outputTokens: input.outputTokens,
 	}, input.updatedAt ?? now);
-	if (input.output) {
-		const output = normalizeOutput(input.output, now);
-		const tasks = result.state.tasks.map((task) => task.id === input.id ? { ...task, output } : task);
+	if (input.output || input.terminalAt) {
+		const output = input.output ? normalizeOutput(input.output, now) : result.task.output;
+		const tasks = result.state.tasks.map((task) => task.id === input.id ? {
+			...task,
+			terminalAt: isTerminal(task.status) ? input.terminalAt ?? task.terminalAt : undefined,
+			output,
+		} : task);
 		return { state: { ...result.state, tasks }, task: cloneTask(tasks.find((task) => task.id === input.id)!) };
 	}
 	return result;

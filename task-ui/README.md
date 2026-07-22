@@ -22,7 +22,7 @@ The sidebar opens automatically as a non-capturing overlay on the right. Toggle 
 /task-ui
 ```
 
-The bar hides responsively below 72 terminal columns. Its `Tasks` panel shows numbered work, nested subtasks, blockers, terminal history, and projected execution telemetry without a summary or progress bar. Subtasks use stable hierarchical labels such as `#2.1` and `#2.1.1` and render immediately beneath their parent in subtask order. Active and pending work share one stable list capped at the first seven items, so the earliest work retains priority; overflow is summarized as `… and N more`. `history` shows only the latest three terminal tasks.
+The bar hides responsively below 72 terminal columns. Its `Tasks` panel shows numbered work, nested subtasks, blockers, terminal history, and projected execution telemetry without a summary or progress bar. Subtasks use stable hierarchical labels such as `#2.1` and `#2.1.1` and render immediately beneath their parent in subtask order. Active and pending work share one stable list capped at the first seven items, so the earliest work retains priority; overflow is summarized as `… and N more`. `history` shows the latest three terminal transitions newest-first and does not reorder them after metadata or output edits. When only history remains, a muted `All done!` message appears above it.
 
 | Icon | Meaning |
 |---|---|
@@ -47,9 +47,11 @@ Parents are independently executable. Their status and progress are not derived 
 | `task_ui_get` | Read one task; without `task_id`, return active, next, and focused tasks |
 | `task_ui_update` | Update status, blockers, focus-driving state, progress, and execution telemetry |
 | `task_ui_output` | Append, read, or clear projected output |
+| `task_ui_remove` | Remove one projected task and detach its children as root tasks |
+| `task_ui_clear` | Clear the entire projection |
 | `task_ui_stop` | Move a task to stopped history, stop its spinner, and advance focus |
 
-`task_ui_stop` does not cancel backend work. The agent must cancel the real backend separately.
+`task_ui_remove`, `task_ui_clear`, and `task_ui_stop` do not modify backend work. The agent must perform matching backend actions separately when needed.
 
 The bundled `task-ui` Agent Skill teaches the agent when to create task sets, mirror backend transitions, maintain execution telemetry, and avoid fabricating state. Invoke it explicitly with `/skill:task-ui` or let Pi load it when the request matches its description.
 

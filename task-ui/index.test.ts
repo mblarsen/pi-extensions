@@ -52,6 +52,8 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 		"task_ui_get",
 		"task_ui_update",
 		"task_ui_output",
+		"task_ui_remove",
+		"task_ui_clear",
 		"task_ui_stop",
 	]);
 	assert.ok(tools.every((tool) => /projection|UI/i.test(tool.description)));
@@ -92,6 +94,7 @@ test("renders newest history tasks first at the same indentation level", () => {
 	state = updateTask(state, { taskId: "parent", status: "completed" }, "2026-01-01T10:01:00.000Z").state;
 	state = updateTask(state, { taskId: "child", status: "completed" }, "2026-01-01T10:02:00.000Z").state;
 	state = updateTask(state, { taskId: "root", status: "completed" }, "2026-01-01T10:03:00.000Z").state;
+	state = updateTask(state, { taskId: "child", subject: "Edited child" }, "2026-01-01T10:04:00.000Z").state;
 	const styled: Array<[string, string]> = [];
 	const theme = {
 		fg: (color: string, text: string) => {
@@ -108,7 +111,7 @@ test("renders newest history tasks first at the same indentation level", () => {
 	assert.match(lines[1], /^│ All done!/);
 	assert.ok(styled.some(([color, text]) => color === "muted" && text === "All done!"));
 	assert.match(lines[3], /^│ ✔ #2 Root/);
-	assert.match(lines[4], /^│ ✔ #1\.1 Child/);
+	assert.match(lines[4], /^│ ✔ #1\.1 Edited child/);
 	assert.match(lines[5], /^│ ✔ #1 Parent/);
 });
 
@@ -126,7 +129,7 @@ test("hides completed dependencies from blocker metadata", () => {
 	assert.equal(blockerText(target, state.tasks), undefined);
 });
 
-test("batch creation, dashboard reads, and stopping stay within the UI projection", async () => {
+test("batch creation, dashboard reads, stopping, and deletion stay within the UI projection", async () => {
 	const { pi, tools } = extensionHarness();
 	taskUiExtension(pi);
 	const tool = (name: string) => tools.find((item) => item.name === name)!;
@@ -146,4 +149,11 @@ test("batch creation, dashboard reads, and stopping stay within the UI projectio
 	assert.match(stopped.content[0].text, /stopped UI history/);
 	const stoppedTask = await tool("task_ui_get").execute("get-one", { task_id: "one" });
 	assert.match(stoppedTask.content[0].text, /\[stopped\]/);
+
+	const removed = await tool("task_ui_remove").execute("remove", { task_id: "two" });
+	assert.match(removed.content[0].text, /Removed two/);
+	const cleared = await tool("task_ui_clear").execute("clear", {});
+	assert.match(cleared.content[0].text, /Cleared 2 projected tasks/);
+	const empty = await tool("task_ui_list").execute("list-empty", {});
+	assert.equal(empty.content[0].text, "No projected tasks");
 });

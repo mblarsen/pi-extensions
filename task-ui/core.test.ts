@@ -96,7 +96,7 @@ describe("task-ui projection", () => {
 		assert.deepEqual(state.tasks, []);
 	});
 
-	test("clears execution state when a task becomes terminal", () => {
+	test("clears execution state and records when a task becomes terminal", () => {
 		let state = createTask(createInitialTaskUiState(), {
 			id: "worker",
 			subject: "Worker",
@@ -109,6 +109,14 @@ describe("task-ui projection", () => {
 		assert.equal(state.tasks[0].status, "failed");
 		assert.equal(state.tasks[0].executing, false);
 		assert.equal(state.tasks[0].inputTokens, 4_100);
+		assert.equal(state.tasks[0].terminalAt, LATER);
+
+		state = updateTask(state, { taskId: "worker", subject: "Edited after failure" }, "2026-07-22T10:02:00.000Z").state;
+		assert.equal(state.tasks[0].terminalAt, LATER);
+		assert.equal(normalizeStoredTaskUiState(state)?.tasks[0].terminalAt, LATER);
+
+		state = updateTask(state, { taskId: "worker", status: "pending" }, "2026-07-22T10:03:00.000Z").state;
+		assert.equal(state.tasks[0].terminalAt, undefined);
 	});
 
 	test("batch creation is atomic when one task is invalid", () => {

@@ -97,6 +97,8 @@ To stop real backend work:
 
 `task_ui_stop` alone never stops backend work.
 
+Use `task_ui_remove` when one obsolete item should disappear from the projection. Its children become root tasks. Use `task_ui_clear` only when the user explicitly wants the entire projected list cleared. Neither tool changes or cancels backend work; perform any matching backend action separately.
+
 ## Read and resynchronize
 
 Call `task_ui_get` without `task_id` to retrieve:

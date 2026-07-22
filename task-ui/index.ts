@@ -277,7 +277,7 @@ export class TaskBarComponent {
 		const work = orderTasksForDisplay(tasks.filter((task) => task.status === "in_progress" || task.status === "pending"));
 		const history = tasks
 			.filter((task) => ["completed", "failed", "stopped"].includes(task.status))
-			.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.number - left.number);
+			.sort((left, right) => (right.terminalAt ?? right.updatedAt).localeCompare(left.terminalAt ?? left.updatedAt) || right.number - left.number);
 		const topTitle = " Tasks ";
 		const topFill = Math.max(0, width - visibleWidth(topTitle) - 2);
 		const lines = [this.theme.fg("borderMuted", `╭${topTitle}${"─".repeat(topFill)}╮`)];
@@ -572,6 +572,37 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 			return { content: [{ type: "text", text }], details: { action: `output:${params.operation}`, task } as TaskToolDetails };
 		},
 		renderCall: (args, theme) => renderToolCall("task_ui_output", `${args.operation} ${args.task_id}`, theme),
+		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
+	});
+
+	pi.registerTool({
+		name: "task_ui_remove",
+		label: "Task UI Remove",
+		description: "Remove one task from task-ui's presentation-only projection. Child tasks become root tasks. Backend unchanged.",
+		promptSnippet: "Remove one task from task-ui (UI only)",
+		executionMode: "sequential",
+		parameters: Type.Object({ task_id: Type.String() }),
+		async execute(_id, params) {
+			persistMutation(removeTask(state, params.task_id));
+			return { content: [{ type: "text", text: `Removed ${params.task_id} from the UI projection. Backend unchanged.` }], details: { action: "remove" } as TaskToolDetails };
+		},
+		renderCall: (args, theme) => renderToolCall("task_ui_remove", args.task_id, theme),
+		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
+	});
+
+	pi.registerTool({
+		name: "task_ui_clear",
+		label: "Task UI Clear",
+		description: "Clear every task from task-ui's presentation-only projection. Backend unchanged.",
+		promptSnippet: "Clear the entire task-ui projection (UI only)",
+		executionMode: "sequential",
+		parameters: Type.Object({}),
+		async execute() {
+			const count = state.tasks.length;
+			persistMutation(createInitialTaskUiState());
+			return { content: [{ type: "text", text: `Cleared ${count} projected tasks. Backend unchanged.` }], details: { action: "clear", tasks: [] } as TaskToolDetails };
+		},
+		renderCall: (_args, theme) => renderToolCall("task_ui_clear", undefined, theme),
 		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
 	});
 
