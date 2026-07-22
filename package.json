@@ -17,10 +17,12 @@
       "./follow-ups/index.ts",
       "./slack-emojis/index.ts",
       "./workmux-rename/index.ts",
-      "./pi-observational-memory-leanctx-bridge/index.ts"
+      "./pi-observational-memory-leanctx-bridge/index.ts",
+      "./task-ui/index.ts"
     ],
     "skills": [
-      "./fux/fux-skill/SKILL.md"
+      "./fux/fux-skill/SKILL.md",
+      "./skills/task-ui/SKILL.md"
     ]
   },
   "peerDependencies": {
