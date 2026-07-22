@@ -2,6 +2,8 @@
 
 A backend-neutral task sidebar for Pi.
 
+![Task sidebar showing executing and completed work](assets/task-ui.png)
+
 `task-ui` is deliberately presentation-only:
 
 - no planning mode
