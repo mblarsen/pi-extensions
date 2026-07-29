@@ -65,6 +65,17 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 	assert.equal(lifecycleEvents.includes("agent_start"), false);
 });
 
+test("renders no window when there are no tasks or history", () => {
+	const state = createInitialTaskUiState();
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+
+	assert.deepEqual(new TaskBarComponent(() => state, () => "✳", theme as never).render(60), []);
+});
+
 test("renders descendants immediately after their parent", () => {
 	const state = createTasks(createInitialTaskUiState(), [
 		{ id: "parent", subject: "Parent" },

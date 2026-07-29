@@ -304,6 +304,7 @@ export class TaskBarComponent {
 	render(width: number): string[] {
 		const state = this.getState();
 		const tasks = state.tasks;
+		if (!tasks.length) return [];
 		const work = orderTasksForDisplay(tasks.filter((task) => task.status === "in_progress" || task.status === "pending"));
 		const history = tasks
 			.filter((task) => ["completed", "failed", "stopped"].includes(task.status))
