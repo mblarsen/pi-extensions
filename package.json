@@ -10,6 +10,7 @@
   "type": "module",
   "pi": {
     "extensions": [
+      "./burn-more-tokens/index.ts",
       "./continue-from/index.ts",
       "./fux/index.ts",
       "./footer-manager/index.ts",

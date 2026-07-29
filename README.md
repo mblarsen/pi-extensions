@@ -6,6 +6,7 @@ Personal extensions for the [Pi coding agent](https://github.com/earendil-works/
 
 | Extension | Description |
 |-----------|-------------|
+| [burn-more-tokens](burn-more-tokens/) | Scroll a random successful-run message on AWTRIX, falling back to macOS `say` when unavailable. |
 | [continue-from](continue-from/) | Resume or nudge a stalled conversation. `/continue-from` with interactive picker + **Alt+C** keybinding. |
 | [fux](fux/) | Fork a session into a side tmux pane for tangential exploration, then merge back into same tree. |
 | [footer-manager](footer-manager/) | Toggle, reorder, and zen-mode the Pi status footer interactively. |
