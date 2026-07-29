@@ -33,14 +33,14 @@ export async function announce(
 	force = false,
 	dependencies: AnnouncementDependencies = {},
 ): Promise<void> {
-	if (await (dependencies.display ?? tryDisplayMessage)(message)) return;
+	await (dependencies.display ?? tryDisplayMessage)(message);
 	if (!force && !(dependencies.speechEnabled ?? isSpeechEnabled)()) return;
 	(dependencies.speak ?? speak)(message);
 }
 
 export default function burnMoreTokensExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("say", {
-		description: "Control completion messages: /say toggle | now",
+		description: "Control spoken completion messages: /say toggle | now",
 		getArgumentCompletions: (prefix) => {
 			const value = prefix.trim();
 			const items = ["toggle", "now"]
@@ -59,7 +59,7 @@ export default function burnMoreTokensExtension(pi: ExtensionAPI): void {
 			if (command === "toggle") {
 				manualEnabled = !isSpeechEnabled();
 				ctx.ui.notify(
-					`Speech fallback ${manualEnabled ? "enabled" : "disabled"}`,
+					`Speech notifications ${manualEnabled ? "enabled" : "disabled"}`,
 					"info",
 				);
 				return;

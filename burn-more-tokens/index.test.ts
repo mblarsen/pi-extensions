@@ -3,6 +3,23 @@ import { describe, test } from "node:test";
 import { announce } from "./index.ts";
 
 describe("announce", () => {
+	test("sends to AWTRIX and speaks when speech is enabled", async () => {
+		const displayed: string[] = [];
+		const spoken: string[] = [];
+
+		await announce("done", false, {
+			display: async (message) => {
+				displayed.push(message);
+				return true;
+			},
+			speechEnabled: () => true,
+			speak: (message) => spoken.push(message),
+		});
+
+		assert.deepEqual(displayed, ["done"]);
+		assert.deepEqual(spoken, ["done"]);
+	});
+
 	test("sends to AWTRIX even when speech is disabled", async () => {
 		const displayed: string[] = [];
 		const spoken: string[] = [];
@@ -20,7 +37,7 @@ describe("announce", () => {
 		assert.deepEqual(spoken, []);
 	});
 
-	test("quiet hours suppress only the speech fallback", async () => {
+	test("quiet hours keep AWTRIX active and suppress speech", async () => {
 		let displayAttempts = 0;
 		const spoken: string[] = [];
 

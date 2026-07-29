@@ -65,7 +65,7 @@ describe("tryDisplayMessage", () => {
 		});
 	});
 
-	test("reports unavailable displays for fallback handling", async () => {
+	test("reports unavailable displays without throwing", async () => {
 		const unavailable: typeof fetch = async () => {
 			throw new Error("offline");
 		};
