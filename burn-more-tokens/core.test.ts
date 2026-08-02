@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
 	DEFAULT_AWTRIX_URL,
+	MESSAGES,
 	isQuietHours,
 	normalizeAwtrixUrl,
 	randomMessage,
@@ -21,6 +22,11 @@ describe("normalizeAwtrixUrl", () => {
 });
 
 describe("randomMessage", () => {
+	test("rotates across 200 unique messages", () => {
+		assert.equal(MESSAGES.length, 200);
+		assert.equal(new Set(MESSAGES).size, 200);
+	});
+
 	test("selects deterministically from the message list", () => {
 		assert.equal(randomMessage(() => 0), "michael, let's burn more tokens");
 	});
