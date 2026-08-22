@@ -13,6 +13,7 @@
       "./burn-more-tokens/index.ts",
       "./continue-from/index.ts",
       "./fux/index.ts",
+      "./ferd/index.ts",
       "./footer-manager/index.ts",
       "./update-changelog/index.ts",
       "./follow-ups/index.ts",
@@ -23,6 +24,7 @@
     ],
     "skills": [
       "./fux/fux-skill/SKILL.md",
+      "./ferd/ferd-skill/SKILL.md",
       "./skills/task-ui/SKILL.md"
     ]
   },

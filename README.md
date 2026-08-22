@@ -9,6 +9,7 @@ Personal extensions for the [Pi coding agent](https://github.com/earendil-works/
 | [burn-more-tokens](burn-more-tokens/) | Scroll a random successful-run message on AWTRIX and announce it with macOS `say` outside quiet hours. |
 | [continue-from](continue-from/) | Resume or nudge a stalled conversation. `/continue-from` with interactive picker + **Alt+C** keybinding. |
 | [fux](fux/) | Fork a session into a side tmux pane for tangential exploration, then merge back into same tree. |
+| [ferd](ferd/) | Fork a session into a side Herdr pane for tangential exploration, then merge back into the same tree. |
 | [footer-manager](footer-manager/) | Toggle, reorder, and zen-mode the Pi status footer interactively. |
 | [follow-ups](follow-ups/) | Capture notes—even during an active response—anchored to assistant messages, then pop them into the chat input later. |
 | [pi-observational-memory-leanctx-bridge](pi-observational-memory-leanctx-bridge/) | Index observational memories in Lean Context and persist exact cross-session evidence in SQLite-backed recall. |
@@ -22,6 +23,7 @@ Personal extensions for the [Pi coding agent](https://github.com/earendil-works/
 | Skill | Description |
 |-------|-------------|
 | [fux](fux/fux-skill/) | When the user says "fork", prefer `fux_fork` over subagents. |
+| [ferd](ferd/ferd-skill/) | When the user says "fork", prefer `ferd_fork` over subagents while using Herdr. |
 
 ## Install
 
@@ -36,8 +38,8 @@ To enable only a subset, filter in `~/.pi/agent/settings.json`:
   "packages": [
     {
       "source": "git:github.com/mblarsen/pi-extensions",
-      "extensions": ["continue-from/index.ts", "fux/index.ts"],
-      "skills": ["fux/fux-skill/SKILL.md"]
+      "extensions": ["continue-from/index.ts", "ferd/index.ts"],
+      "skills": ["ferd/ferd-skill/SKILL.md"]
     }
   ]
 }

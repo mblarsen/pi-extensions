@@ -1,6 +1,6 @@
 ---
 name: fux
-description: Fork the current session to explore a topic in isolation. Use when the user says fork, asks to fork, or explicitly agrees to fork. Prefer fux_fork over subagents for fork requests. Merge and delete are user-only slash commands.
+description: Fork the current session into a tmux pane to explore a topic in isolation. Use when Pi runs inside tmux and the user asks or agrees to fork. Prefer fux_fork over subagents. Merge and delete are user-only slash commands.
 ---
 
 # Fux
