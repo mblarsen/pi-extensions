@@ -15,6 +15,7 @@ function extensionHarness(): { pi: ExtensionAPI; tools: RegisteredTool[] } {
 	const pi = {
 		registerTool(tool: RegisteredTool) { tools.push(tool); },
 		registerCommand() {},
+		registerShortcut() {},
 		on() {},
 		events: { on() {} },
 	} as unknown as ExtensionAPI;
@@ -24,6 +25,7 @@ function extensionHarness(): { pi: ExtensionAPI; tools: RegisteredTool[] } {
 test("registers only presentation tools, adapter events, and lifecycle UI hooks", () => {
 	const tools: Array<{ name: string; description: string }> = [];
 	const commands: string[] = [];
+	const shortcuts: string[] = [];
 	const lifecycleEvents: string[] = [];
 	const adapterEvents: string[] = [];
 	const pi = {
@@ -32,6 +34,9 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 		},
 		registerCommand(name: string) {
 			commands.push(name);
+		},
+		registerShortcut(shortcut: string) {
+			shortcuts.push(shortcut);
 		},
 		on(name: string) {
 			lifecycleEvents.push(name);
@@ -58,6 +63,7 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 	]);
 	assert.ok(tools.every((tool) => /projection|UI/i.test(tool.description)));
 	assert.deepEqual(commands, ["task-ui"]);
+	assert.deepEqual(shortcuts, ["alt+u"]);
 	assert.deepEqual(lifecycleEvents, ["session_start", "session_tree", "session_shutdown"]);
 	assert.deepEqual(adapterEvents, Object.values(TASK_UI_EVENTS));
 	assert.equal(lifecycleEvents.includes("before_agent_start"), false);

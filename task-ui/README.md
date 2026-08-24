@@ -16,7 +16,7 @@ The agent coordinates a real backend—such as `ctx_task`—and mirrors its stat
 
 ## UI
 
-The sidebar opens automatically as a non-capturing overlay on the right. Toggle it with:
+The sidebar opens automatically as a non-capturing overlay on the right. Toggle it with `Alt+U` or:
 
 ```text
 /task-ui

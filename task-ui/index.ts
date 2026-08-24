@@ -440,6 +440,22 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		});
 	};
 
+	const toggleOverlay = (ctx: ExtensionContext) => {
+		if (ctx.mode !== "tui") {
+			ctx.ui.notify("Task UI requires interactive mode", "warning");
+			return;
+		}
+		if (!overlayHandle) {
+			showOverlay(ctx);
+			ctx.ui.notify("Task UI shown", "info");
+			return;
+		}
+		overlayVisible = !overlayVisible;
+		overlayHandle.setHidden(!overlayVisible);
+		syncAnimation();
+		ctx.ui.notify(`Task UI ${overlayVisible ? "shown" : "hidden"}`, "info");
+	};
+
 	const persistMutation = (next: TaskUiState): TaskUiState => {
 		setState(next);
 		return next;
@@ -662,23 +678,14 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
 	});
 
+	pi.registerShortcut("alt+u", {
+		description: "Toggle the non-capturing task sidebar",
+		handler: async (ctx) => toggleOverlay(ctx),
+	});
+
 	pi.registerCommand("task-ui", {
 		description: "Toggle the non-capturing task sidebar",
-		handler: async (_args, ctx) => {
-			if (ctx.mode !== "tui") {
-				ctx.ui.notify("/task-ui requires interactive mode", "warning");
-				return;
-			}
-			if (!overlayHandle) {
-				showOverlay(ctx);
-				ctx.ui.notify("Task UI shown", "info");
-				return;
-			}
-			overlayVisible = !overlayVisible;
-			overlayHandle.setHidden(!overlayVisible);
-			syncAnimation();
-			ctx.ui.notify(`Task UI ${overlayVisible ? "shown" : "hidden"}`, "info");
-		},
+		handler: async (_args, ctx) => toggleOverlay(ctx),
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
