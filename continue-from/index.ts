@@ -1,7 +1,12 @@
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
-import { realpathSync } from "node:fs";
+import {
+	CustomEditor,
+	type ExtensionAPI,
+	type ExtensionCommandContext,
+	type ExtensionContext,
+	type KeybindingsManager,
+	type SessionEntry,
+} from "@earendil-works/pi-coding-agent";
+import { matchesKey, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 
 const CUSTOM_TYPE = "continue-from";
 const HIDDEN_CONTINUE_PROMPT = [
@@ -154,27 +159,6 @@ function notify(ctx: ExtensionContext, message: string, level: "info" | "warning
 	}
 }
 
-function getPiPackageRoot(): string {
-	const argvPath = process.argv[1];
-	if (!argvPath) {
-		throw new Error("Unable to locate the running pi package path.");
-	}
-
-	const realPath = realpathSync(argvPath);
-	return dirname(dirname(realPath));
-}
-
-async function loadEditorRuntime(): Promise<{
-	CustomEditor: new (tui: unknown, theme: unknown, keybindings: unknown, options?: unknown) => { handleInput(data: string): void; onSubmit?: (text: string) => void };
-	matchesKey: (data: string, key: string) => boolean;
-}> {
-	const packageRoot = getPiPackageRoot();
-	const customEditorPath = pathToFileURL(join(packageRoot, "dist/modes/interactive/components/custom-editor.js")).href;
-	const tuiPath = pathToFileURL(join(packageRoot, "node_modules/@earendil-works/pi-tui/dist/index.js")).href;
-	const [{ CustomEditor }, { matchesKey }] = await Promise.all([import(customEditorPath), import(tuiPath)]);
-	return { CustomEditor, matchesKey };
-}
-
 async function chooseCandidate(args: string, ctx: ExtensionCommandContext, candidates: Candidate[]): Promise<Candidate | undefined> {
 	const argChoice = parseChoice(args);
 	if (argChoice) {
@@ -248,14 +232,12 @@ async function continueFrom(args: string, ctx: ExtensionCommandContext, pi: Exte
 	notify(ctx, "Rewound to the last user message. Press Enter to send it again.", "info");
 }
 
-export default async function (pi: ExtensionAPI) {
-	const { CustomEditor, matchesKey } = await loadEditorRuntime();
-
+export default function (pi: ExtensionAPI) {
 	class ContinueFromEditor extends CustomEditor {
 		constructor(
-			tui: unknown,
-			theme: unknown,
-			keybindings: unknown,
+			tui: TUI,
+			theme: EditorTheme,
+			keybindings: KeybindingsManager,
 			private readonly isIdle: () => boolean,
 			private readonly warnNotIdle: () => void,
 		) {
