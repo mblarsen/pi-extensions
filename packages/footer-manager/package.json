@@ -1,0 +1,35 @@
+{
+  "name": "@mblarsen/pi-footer-manager",
+  "version": "0.1.0",
+  "description": "Toggle, reorder, and simplify the Pi status footer.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "files": [
+    "index.ts",
+    "README.md",
+    "demo.gif"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mblarsen/pi-extensions.git",
+    "directory": "packages/footer-manager"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "author": "Michael Bøcker-Larsen"
+}

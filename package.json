@@ -1,46 +1,33 @@
 {
   "name": "@mblarsen/pi-extensions",
-  "version": "0.1.0",
-  "description": "Personal extensions for the Pi coding agent.",
+  "version": "0.2.0",
+  "description": "Workspace for Michael Bøcker-Larsen's Pi coding agent extensions.",
+  "author": "Michael Bøcker-Larsen",
   "license": "MIT",
-  "private": false,
-  "keywords": [
-    "pi-package"
-  ],
+  "private": true,
   "type": "module",
-  "pi": {
-    "extensions": [
-      "./burn-more-tokens/index.ts",
-      "./continue-from/index.ts",
-      "./fux/index.ts",
-      "./ferd/index.ts",
-      "./footer-manager/index.ts",
-      "./update-changelog/index.ts",
-      "./follow-ups/index.ts",
-      "./slack-emojis/index.ts",
-      "./workmux-rename/index.ts",
-      "./pi-observational-memory-leanctx-bridge/index.ts",
-      "./task-ui/index.ts"
-    ],
-    "skills": [
-      "./fux/fux-skill/SKILL.md",
-      "./ferd/ferd-skill/SKILL.md",
-      "./skills/task-ui/SKILL.md"
-    ]
+  "packageManager": "npm@11.17.0",
+  "engines": {
+    "node": ">=22.14.0"
   },
-  "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "node --test packages/*/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "pack:check": "npm pack --workspaces --dry-run",
+    "check": "npm run typecheck && npm test && npm run pack:check",
+    "changeset": "changeset",
+    "changeset:version": "changeset version",
+    "release": "changeset publish"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.79.0",
-    "@earendil-works/pi-coding-agent": "^0.79.0",
-    "@earendil-works/pi-tui": "^0.79.0",
+    "@changesets/cli": "^3.0.1",
+    "@earendil-works/pi-ai": "^0.84.3",
+    "@earendil-works/pi-coding-agent": "^0.84.3",
+    "@earendil-works/pi-tui": "^0.84.3",
+    "@types/node": "^24.0.0",
     "typescript": "^6.0.3"
-  },
-  "dependencies": {
-    "gemoji": "^8.1.0"
   }
 }
