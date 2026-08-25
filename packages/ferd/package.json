@@ -1,0 +1,38 @@
+{
+  "name": "@mblarsen/pi-ferd",
+  "version": "0.1.0",
+  "description": "Fork Pi sessions into Herdr panes and merge them back.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "files": [
+    "index.ts",
+    "README.md",
+    "skill"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mblarsen/pi-extensions.git",
+    "directory": "packages/ferd"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": [
+      "./skill/SKILL.md"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "author": "Michael Bøcker-Larsen"
+}

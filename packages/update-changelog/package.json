@@ -1,0 +1,37 @@
+{
+  "name": "@mblarsen/pi-update-changelog",
+  "version": "0.1.0",
+  "description": "View changelogs and update installed Pi packages interactively.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "files": [
+    "index.ts",
+    "README.md",
+    "demo.gif",
+    "demo1.png",
+    "demo2.png"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mblarsen/pi-extensions.git",
+    "directory": "packages/update-changelog"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "author": "Michael Bøcker-Larsen"
+}

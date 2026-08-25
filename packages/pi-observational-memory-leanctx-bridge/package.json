@@ -1,0 +1,35 @@
+{
+  "name": "@mblarsen/pi-observational-memory-leanctx-bridge",
+  "version": "0.1.0",
+  "description": "Index Pi observational memories in Lean Context with exact evidence recall.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "files": [
+    "index.ts",
+    "core.ts",
+    "archived-recall.ts",
+    "evidence-store.ts",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mblarsen/pi-extensions.git",
+    "directory": "packages/pi-observational-memory-leanctx-bridge"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "author": "Michael Bøcker-Larsen"
+}

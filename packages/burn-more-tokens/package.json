@@ -1,0 +1,33 @@
+{
+  "name": "@mblarsen/pi-burn-more-tokens",
+  "version": "0.1.0",
+  "description": "Announce successful Pi runs through AWTRIX and macOS speech.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "files": [
+    "index.ts",
+    "core.ts",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mblarsen/pi-extensions.git",
+    "directory": "packages/burn-more-tokens"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "author": "Michael Bøcker-Larsen"
+}
