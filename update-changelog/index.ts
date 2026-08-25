@@ -486,6 +486,7 @@ class UpdateExplorer {
     private pi: ExtensionAPI,
     private theme: any,
     private tui: any,
+    private notify: (message: string, type?: "info" | "warning" | "error") => void,
     private done: (result?: any) => void,
     private onUpdateInstalled?: (displayName: string) => void
   ) {
@@ -753,7 +754,7 @@ class UpdateExplorer {
         update.updateStatus = "error";
         update.updateError = errorMsg;
         if (this.disposed) return;
-        this.tui.notify(`Failed to update ${update.displayName}: ${errorMsg.slice(0, 100)}`, "error");
+        this.notify(`Failed to update ${update.displayName}: ${errorMsg.slice(0, 100)}`, "error");
         this.updateSelectListSpinners();
         this.rebuild();
         this.tui.requestRender();
@@ -763,7 +764,7 @@ class UpdateExplorer {
       update.updateStatus = "error";
       update.updateError = err.message;
       if (this.disposed) return;
-      this.tui.notify(`Failed to update: ${err.message}`, "error");
+      this.notify(`Failed to update: ${err.message}`, "error");
       this.updateSelectListSpinners();
       this.rebuild();
       this.tui.requestRender();
@@ -1339,7 +1340,8 @@ export default function (pi: ExtensionAPI) {
           resultsPromise, 
           pi, 
           theme, 
-          tui, 
+          tui,
+          (message, type) => ctx.ui.notify(message, type),
           done,
           (displayName) => {
             cachedUpdates = cachedUpdates.filter(r => r.displayName !== displayName);
