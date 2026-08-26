@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { copyFile, readFile, unlink, writeFile } from "node:fs/promises";
@@ -6,7 +6,6 @@ import { basename, dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
-import { pathToFileURL } from "node:url";
 
 const COMMAND_NAME = "ferd";
 const FERD_CUSTOM_TYPE = "ferd";
@@ -91,29 +90,6 @@ type MergePlan = {
 	backupFile: string;
 	duplicateCount: number;
 };
-
-function getPiPackageRoot(): string {
-	const argvPath = process.argv[1];
-	if (!argvPath) {
-		throw new Error("Unable to locate the running pi command path.");
-	}
-
-	return dirname(dirname(realpathSync(argvPath)));
-}
-
-async function loadSessionManager(): Promise<{
-	SessionManager: {
-		open(path: string, sessionDir?: string): {
-			createBranchedSession(leafId: string): string | undefined;
-			appendCustomEntry(customType: string, data?: unknown): string;
-			appendCustomMessageEntry(customType: string, content: string, display: boolean, details?: unknown): string;
-		};
-	};
-}> {
-	const packageRoot = getPiPackageRoot();
-	const sessionManagerPath = pathToFileURL(join(packageRoot, "dist/core/session-manager.js")).href;
-	return import(sessionManagerPath);
-}
 
 function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -1102,7 +1078,6 @@ async function doFerd(pi: ExtensionAPI, ctx: ExtensionContext, prompt?: string):
 		throw new Error("No leaf id");
 	}
 
-	const { SessionManager } = await loadSessionManager();
 	const sourceManager = SessionManager.open(currentSessionFile, ctx.sessionManager.getSessionDir());
 	const forkedSessionFile = sourceManager.createBranchedSession(leafId);
 	if (!forkedSessionFile) {
