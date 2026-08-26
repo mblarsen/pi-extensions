@@ -1,6 +1,6 @@
 {
   "name": "@mblarsen/pi-fux",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Fork Pi sessions into tmux panes and merge them back.",
   "license": "MIT",
   "type": "module",
