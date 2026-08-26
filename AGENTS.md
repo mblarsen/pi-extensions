@@ -56,6 +56,34 @@ The `Release` workflow on `main` has two modes:
 1. If unreleased changesets exist, it creates or updates the Changesets version PR.
 2. If the version PR was merged, it publishes the new package versions with npm trusted publishing.
 
+The repository must allow GitHub Actions to create and approve pull requests. Keep the default workflow permission set to read-only. The workflow grants its required permissions in `release.yml`.
+
+Check the repository setting with:
+
+```bash
+gh api repos/mblarsen/pi-extensions/actions/permissions/workflow
+```
+
+The response must contain:
+
+```json
+{
+  "default_workflow_permissions": "read",
+  "can_approve_pull_request_reviews": true
+}
+```
+
+If Changesets reports that GitHub Actions cannot create pull requests, do not change package versions or changelogs by hand. Use this fallback:
+
+1. Create a `changeset-release/<slug>` branch from `main`.
+2. Run `npx changeset version`.
+3. Run `npm install --package-lock-only`.
+4. Inspect all changed versions, changelogs, and lockfile entries.
+5. Run `npm ci` and `npm run check`.
+6. Commit with `chore: version packages`.
+7. Push the branch and create a `Version Packages` PR with `gh pr create --body-file <path>`.
+8. Merge the PR only after the required release confirmation. The merge triggers npm trusted publishing.
+
 Publishing and merging a version PR are irreversible release actions. Get explicit confirmation immediately before either action unless Michael already gave exact permission for that release.
 
 After publishing, verify each expected version:
