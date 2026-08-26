@@ -56,24 +56,17 @@ The `Release` workflow on `main` has two modes:
 1. If unreleased changesets exist, it creates or updates the Changesets version PR.
 2. If the version PR was merged, it publishes the new package versions with npm trusted publishing.
 
-The repository must allow GitHub Actions to create and approve pull requests. Keep the default workflow permission set to read-only. The workflow grants its required permissions in `release.yml`.
+The repository is configured to let GitHub Actions create Changesets version PRs. Default workflow permissions remain read-only. The workflow grants its required permissions in `release.yml`. Do not check the repository setting during a normal release.
 
-Check the repository setting with:
+If Changesets reports that GitHub Actions cannot create pull requests, check the repository setting:
 
 ```bash
 gh api repos/mblarsen/pi-extensions/actions/permissions/workflow
 ```
 
-The response must contain:
+The expected values are `"default_workflow_permissions": "read"` and `"can_approve_pull_request_reviews": true`.
 
-```json
-{
-  "default_workflow_permissions": "read",
-  "can_approve_pull_request_reviews": true
-}
-```
-
-If Changesets reports that GitHub Actions cannot create pull requests, do not change package versions or changelogs by hand. Use this fallback:
+If the setting is correct and the error continues, do not change package versions or changelogs by hand. Use this fallback:
 
 1. Create a `changeset-release/<slug>` branch from `main`.
 2. Run `npx changeset version`.
