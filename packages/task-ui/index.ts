@@ -53,6 +53,31 @@ type SnapshotEvent = { tasks: ExternalTaskInput[]; focusedTaskId?: string };
 type RemoveEvent = { taskId: string };
 type OutputEvent = { taskId: string; text: string };
 type FocusEvent = { taskId?: string };
+type TaskUiCheckpoint = "git commit" | "link_send";
+type ToolResultCheckpointInput = { toolName: string; input: unknown; isError: boolean };
+
+const GIT_COMMIT_COMMAND = /(?:^|(?:&&|\|\||[;()\n])\s*)git(?:\s+-C\s+(?:"[^"]*"|'[^']*'|[^\s;&|()]+))?\s+commit(?=$|[\s;&|()])/;
+
+export function checkpointForToolResult(event: ToolResultCheckpointInput): TaskUiCheckpoint | undefined {
+	if (event.isError !== false) return undefined;
+	if (event.toolName === "link_send") return "link_send";
+	if (event.toolName !== "bash" || typeof event.input !== "object" || event.input === null) return undefined;
+	const command = (event.input as { command?: unknown }).command;
+	return typeof command === "string" && GIT_COMMIT_COMMAND.test(command) ? "git commit" : undefined;
+}
+
+function checkpointReminder(trigger: TaskUiCheckpoint): string {
+	return `Task UI checkpoint: A successful ${trigger} just occurred.
+
+Before continuing, reconcile task-ui with the actual work state:
+- update affected task statuses, progress, and execution state;
+- add newly discovered work only when it is meaningful;
+- do not mark a task complete merely because this checkpoint succeeded.
+
+If task-ui is already accurate, make no changes.
+
+If you change task-ui, mention the update in your next natural user-facing status message. Do not interrupt, pause, or redirect the current work solely to report it; resume the ongoing work immediately.`;
+}
 
 type AgentTaskInput = {
 	id?: string;
@@ -371,6 +396,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 	let sessionActive = false;
 	let spinnerFrame = 0;
 	let animationTimer: ReturnType<typeof setInterval> | undefined;
+	let checkpointReminderQueued = false;
 
 	const stopAnimation = () => {
 		if (animationTimer) clearInterval(animationTimer);
@@ -688,9 +714,36 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		handler: async (_args, ctx) => toggleOverlay(ctx),
 	});
 
+	pi.on("tool_result", async (event, ctx) => {
+		const checkpoint = checkpointForToolResult(event);
+		const hasUnfinishedTasks = state.tasks.some((task) => task.status === "pending" || task.status === "in_progress");
+		if (!checkpoint || !hasUnfinishedTasks || checkpointReminderQueued) return;
+
+		checkpointReminderQueued = true;
+		try {
+			pi.sendMessage({
+				customType: "task-ui-checkpoint-reminder",
+				content: checkpointReminder(checkpoint),
+				display: false,
+				details: { checkpoint, timestamp: Date.now() },
+			}, { deliverAs: "steer" });
+		} catch (error) {
+			checkpointReminderQueued = false;
+			if (ctx.hasUI) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Task UI checkpoint reminder failed: ${message}`, "warning");
+			}
+		}
+	});
+
+	pi.on("turn_start", async () => {
+		checkpointReminderQueued = false;
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		currentCtx = ctx;
 		sessionActive = true;
+		checkpointReminderQueued = false;
 		state = createInitialTaskUiState();
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type !== "custom" || entry.customType !== STATE_ENTRY_TYPE) continue;
@@ -705,6 +758,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
+		checkpointReminderQueued = false;
 		state = createInitialTaskUiState();
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type !== "custom" || entry.customType !== STATE_ENTRY_TYPE) continue;
@@ -717,6 +771,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		sessionActive = false;
+		checkpointReminderQueued = false;
 		currentCtx = undefined;
 		stopAnimation();
 		overlayHandle?.hide();

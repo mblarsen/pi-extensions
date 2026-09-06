@@ -63,6 +63,19 @@ Parents are independently executable. Their status and progress are not derived 
 
 The bundled `task-ui` Agent Skill teaches the agent when to create task sets, mirror backend transitions, maintain execution telemetry, and avoid fabricating state. Invoke it explicitly with `/skill:task-ui` or let Pi load it when the request matches its description.
 
+## Checkpoint reminders
+
+The extension sends a hidden context reminder after these successful tool calls:
+
+- a Bash command that invokes `git commit`
+- `link_send`
+
+The reminder runs only when the projection contains an active or pending task. It asks the agent to reconcile task status, progress, and execution state before work continues. It also asks the agent to report task-ui changes in the next natural status update without interrupting the current work.
+
+The extension sends at most one reminder per agent turn. A compound Bash command must succeed as a whole. For example, `git commit && git push` does not trigger a reminder when the push fails.
+
+The reminder is hidden from the transcript, but it remains part of the agent context. Task state remains in TUI-only session entries and does not enter the agent context.
+
 ### Execution telemetry
 
 Create and update operations accept:

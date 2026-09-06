@@ -3,7 +3,14 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createInitialTaskUiState, createTasks, updateTask } from "./core.ts";
-import taskUiExtension, { blockerText, orderTasksForDisplay, TaskBarComponent, TASK_UI_EVENTS, taskLabelColor } from "./index.ts";
+import taskUiExtension, {
+	blockerText,
+	checkpointForToolResult,
+	orderTasksForDisplay,
+	TaskBarComponent,
+	TASK_UI_EVENTS,
+	taskLabelColor,
+} from "./index.ts";
 
 type RegisteredTool = {
 	name: string;
@@ -64,11 +71,118 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 	assert.ok(tools.every((tool) => /projection|UI/i.test(tool.description)));
 	assert.deepEqual(commands, ["task-ui"]);
 	assert.deepEqual(shortcuts, ["alt+u"]);
-	assert.deepEqual(lifecycleEvents, ["session_start", "session_tree", "session_shutdown"]);
+	assert.deepEqual(lifecycleEvents, ["tool_result", "turn_start", "session_start", "session_tree", "session_shutdown"]);
 	assert.deepEqual(adapterEvents, Object.values(TASK_UI_EVENTS));
 	assert.equal(lifecycleEvents.includes("before_agent_start"), false);
 	assert.equal(lifecycleEvents.includes("tool_call"), false);
 	assert.equal(lifecycleEvents.includes("agent_start"), false);
+});
+
+test("classifies only successful checkpoint tool results", () => {
+	const checkpoint = (toolName: string, input: unknown, isError = false) =>
+		checkpointForToolResult({ toolName, input, isError });
+
+	assert.equal(checkpoint("bash", { command: "git commit -m 'save work'" }), "git commit");
+	assert.equal(checkpoint("bash", { command: "cd repo && git commit" }), "git commit");
+	assert.equal(checkpoint("bash", { command: "git -C repo commit --amend" }), "git commit");
+	assert.equal(checkpoint("bash", { command: "npm test; git commit -am done" }), "git commit");
+	assert.equal(checkpoint("bash", { command: "echo 'git commit'" }), undefined);
+	assert.equal(checkpoint("bash", { command: "git commitment" }), undefined);
+	assert.equal(checkpoint("bash", { command: "git commit -m failed" }, true), undefined);
+	assert.equal(checkpoint("bash", {}, false), undefined);
+	assert.equal(checkpoint("link_send", { to: "worker", message: "status" }), "link_send");
+	assert.equal(checkpoint("link_send", { to: "worker", message: "status" }, true), undefined);
+	assert.equal(checkpoint("read", { path: "README.md" }), undefined);
+});
+
+test("queues one hidden task reminder per turn when unfinished tasks exist", async () => {
+	const tools: RegisteredTool[] = [];
+	const handlers = new Map<string, (event: Record<string, unknown>, ctx: Record<string, unknown>) => Promise<unknown>>();
+	const messages: Array<{ message: { customType: string; content: string; display: boolean }; options: { deliverAs: string } }> = [];
+	const pi = {
+		registerTool(tool: RegisteredTool) { tools.push(tool); },
+		registerCommand() {},
+		registerShortcut() {},
+		on(name: string, handler: (event: Record<string, unknown>, ctx: Record<string, unknown>) => Promise<unknown>) {
+			handlers.set(name, handler);
+		},
+		sendMessage(message: { customType: string; content: string; display: boolean }, options: { deliverAs: string }) {
+			messages.push({ message, options });
+		},
+		appendEntry() {},
+		events: { on() {} },
+	} as unknown as ExtensionAPI;
+	const ctx = { hasUI: false, mode: "json", ui: { notify() {} } } as unknown as Record<string, unknown>;
+	taskUiExtension(pi);
+	const tool = (name: string) => tools.find((item) => item.name === name)!;
+	await tool("task_ui_create").execute("create", { id: "work", subject: "Work" });
+
+	await handlers.get("tool_result")?.({ toolName: "bash", input: { command: "git commit -m done" }, isError: false }, ctx);
+	await handlers.get("tool_result")?.({ toolName: "link_send", input: {}, isError: false }, ctx);
+
+	assert.equal(messages.length, 1);
+	assert.equal(messages[0].message.customType, "task-ui-checkpoint-reminder");
+	assert.equal(messages[0].message.display, false);
+	assert.match(messages[0].message.content, /successful git commit/);
+	assert.match(messages[0].message.content, /mention the update in your next natural user-facing status message/);
+	assert.deepEqual(messages[0].options, { deliverAs: "steer" });
+
+	await handlers.get("turn_start")?.({}, ctx);
+	await handlers.get("tool_result")?.({ toolName: "link_send", input: {}, isError: false }, ctx);
+	assert.equal(messages.length, 2);
+	assert.match(messages[1].message.content, /successful link_send/);
+});
+
+test("does not queue checkpoint reminders without unfinished projected tasks", async () => {
+	const tools: RegisteredTool[] = [];
+	const handlers = new Map<string, (event: Record<string, unknown>, ctx: Record<string, unknown>) => Promise<unknown>>();
+	const messages: unknown[] = [];
+	const pi = {
+		registerTool(tool: RegisteredTool) { tools.push(tool); },
+		registerCommand() {},
+		registerShortcut() {},
+		on(name: string, handler: (event: Record<string, unknown>, ctx: Record<string, unknown>) => Promise<unknown>) {
+			handlers.set(name, handler);
+		},
+		sendMessage(message: unknown) { messages.push(message); },
+		events: { on() {} },
+	} as unknown as ExtensionAPI;
+	const ctx = { hasUI: false, mode: "json", ui: { notify() {} } } as unknown as Record<string, unknown>;
+	taskUiExtension(pi);
+
+	await handlers.get("tool_result")?.({ toolName: "link_send", input: {}, isError: false }, ctx);
+	assert.equal(messages.length, 0);
+
+	const tool = (name: string) => tools.find((item) => item.name === name)!;
+	await tool("task_ui_create").execute("create", { id: "done", subject: "Done", status: "completed" });
+	await handlers.get("tool_result")?.({ toolName: "bash", input: { command: "git commit --allow-empty -m done" }, isError: false }, ctx);
+	assert.equal(messages.length, 0);
+});
+
+test("reports checkpoint reminder injection failures without interrupting tool results", async () => {
+	const tools: RegisteredTool[] = [];
+	const handlers = new Map<string, (event: Record<string, unknown>, ctx: Record<string, unknown>) => Promise<unknown>>();
+	const notifications: Array<[string, string]> = [];
+	const pi = {
+		registerTool(tool: RegisteredTool) { tools.push(tool); },
+		registerCommand() {},
+		registerShortcut() {},
+		on(name: string, handler: (event: Record<string, unknown>, ctx: Record<string, unknown>) => Promise<unknown>) {
+			handlers.set(name, handler);
+		},
+		sendMessage() { throw new Error("send failed"); },
+		events: { on() {} },
+	} as unknown as ExtensionAPI;
+	const ctx = {
+		hasUI: true,
+		mode: "tui",
+		ui: { notify(message: string, level: string) { notifications.push([message, level]); } },
+	} as unknown as Record<string, unknown>;
+	taskUiExtension(pi);
+	await tools.find((item) => item.name === "task_ui_create")?.execute("create", { id: "work", subject: "Work" });
+
+	await assert.doesNotReject(() => handlers.get("tool_result")!({ toolName: "link_send", input: {}, isError: false }, ctx));
+	assert.deepEqual(notifications, [["Task UI checkpoint reminder failed: send failed", "warning"]]);
 });
 
 test("renders no window when there are no tasks or history", () => {

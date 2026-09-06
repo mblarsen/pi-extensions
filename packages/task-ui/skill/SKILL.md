@@ -87,6 +87,21 @@ When the worker stops running but the task remains unfinished, set `executing: f
 
 Spawning a sub-agent does not automatically update task-ui. The coordinating agent must call the backend tool and the matching `task_ui_update` separately.
 
+## Checkpoint reminders
+
+The extension can send a hidden task-ui checkpoint reminder after a successful `git commit` or `link_send` tool call.
+
+When you receive this reminder:
+
+1. Compare the projection with the actual work state.
+2. Update affected task status, progress, and execution state.
+3. Add newly discovered work only when it is meaningful.
+4. Do not mark work complete only because the checkpoint succeeded.
+5. If you change task-ui, mention the change in your next natural status update.
+6. Resume the current work without waiting for confirmation.
+
+If the projection is accurate, do not change it.
+
 ## Finish or interrupt work
 
 After successful completion, call `task_ui_update` with `status: "completed"`, `executing: false`, and `progress: 100`.
