@@ -297,6 +297,7 @@ function taskLine(
 	const content = `${indent}${glyph} ${taskLabel}`;
 	if (task.status === "failed") return theme.fg("error", content);
 	if (task.status === "pending") return theme.fg("muted", content);
+	if (task.status === "stopped") return theme.fg("dim", content);
 	return focused ? theme.bold(content) : content;
 }
 
@@ -358,7 +359,7 @@ export class TaskBarComponent {
 						task.label,
 						width,
 						this.theme,
-						task.status === "completed",
+						task.status === "completed" || task.status === "stopped",
 					));
 				}
 			}
