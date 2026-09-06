@@ -1,5 +1,11 @@
 # @mblarsen/pi-task-ui
 
+## 0.3.0
+
+### Minor Changes
+
+- ea16b15: Add a read-only full task browser with ordered navigation and scrolling.
+
 ## 0.2.1
 
 ### Patch Changes
