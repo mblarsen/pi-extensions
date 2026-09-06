@@ -8,6 +8,7 @@ import taskUiExtension, {
 	checkpointForToolResult,
 	orderTasksForDisplay,
 	TaskBarComponent,
+	TaskBrowserComponent,
 	TASK_UI_EVENTS,
 	taskLabelColor,
 } from "./index.ts";
@@ -32,6 +33,7 @@ function extensionHarness(): { pi: ExtensionAPI; tools: RegisteredTool[] } {
 test("registers only presentation tools, adapter events, and lifecycle UI hooks", () => {
 	const tools: Array<{ name: string; description: string }> = [];
 	const commands: string[] = [];
+	let getArgumentCompletions: ((prefix: string) => Array<{ value: string }> | null) | undefined;
 	const shortcuts: string[] = [];
 	const lifecycleEvents: string[] = [];
 	const adapterEvents: string[] = [];
@@ -39,8 +41,9 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 		registerTool(tool: { name: string; description: string }) {
 			tools.push(tool);
 		},
-		registerCommand(name: string) {
+		registerCommand(name: string, options: { getArgumentCompletions?: typeof getArgumentCompletions }) {
 			commands.push(name);
+			getArgumentCompletions = options.getArgumentCompletions;
 		},
 		registerShortcut(shortcut: string) {
 			shortcuts.push(shortcut);
@@ -70,7 +73,9 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 	]);
 	assert.ok(tools.every((tool) => /projection|UI/i.test(tool.description)));
 	assert.deepEqual(commands, ["task-ui"]);
-	assert.deepEqual(shortcuts, ["alt+u"]);
+	assert.deepEqual(getArgumentCompletions?.("b")?.map((item) => item.value), ["browse"]);
+	assert.deepEqual(getArgumentCompletions?.("")?.map((item) => item.value), ["browse", "toggle"]);
+	assert.deepEqual(shortcuts, ["alt+u", "alt+shift+u"]);
 	assert.deepEqual(lifecycleEvents, ["tool_result", "turn_start", "session_start", "session_tree", "session_shutdown"]);
 	assert.deepEqual(adapterEvents, Object.values(TASK_UI_EVENTS));
 	assert.equal(lifecycleEvents.includes("before_agent_start"), false);
@@ -194,6 +199,88 @@ test("renders no window when there are no tasks or history", () => {
 	};
 
 	assert.deepEqual(new TaskBarComponent(() => state, () => "✳", theme as never).render(60), []);
+});
+
+test("browser shows every task in hierarchical number order", () => {
+	const state = createTasks(createInitialTaskUiState(), [
+		{ id: "parent", subject: "Completed parent", status: "completed" },
+		{ id: "other", subject: "Active root", status: "in_progress" },
+		{ id: "child", subject: "Pending child", parentId: "parent" },
+	]).state;
+	state.focusedTaskId = "child";
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const keybindings = { matches: () => false };
+	const browser = new TaskBrowserComponent(
+		() => state,
+		() => "✳",
+		() => 10,
+		theme as never,
+		keybindings as never,
+		() => {},
+		() => {},
+	);
+	const lines = browser.render(60).map(stripVTControlCharacters);
+
+	assert.equal(browser.getSelectedTaskId(), "child");
+	assert.ok(lines.findIndex((line) => line.includes("#1 Completed parent")) < lines.findIndex((line) => line.includes("#1.1 Pending child")));
+	assert.ok(lines.findIndex((line) => line.includes("#1.1 Pending child")) < lines.findIndex((line) => line.includes("#2 Active root")));
+	assert.match(lines.find((line) => line.includes("Pending child")) ?? "", /›/);
+});
+
+test("browser navigates and scrolls through the complete task list", () => {
+	const state = createTasks(
+		createInitialTaskUiState(),
+		Array.from({ length: 10 }, (_, index) => ({ id: `task-${index + 1}`, subject: `Task ${index + 1}` })),
+	).state;
+	const bindingKeys: Record<string, string[]> = {
+		"tui.select.cancel": ["escape"],
+		"tui.select.up": ["up"],
+		"tui.select.down": ["down"],
+	};
+	const keybindings = { matches: (data: string, binding: string) => bindingKeys[binding]?.includes(data) ?? false };
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	let renders = 0;
+	let closes = 0;
+	const browser = new TaskBrowserComponent(
+		() => state,
+		() => "✳",
+		() => 9,
+		theme as never,
+		keybindings as never,
+		() => { renders += 1; },
+		() => { closes += 1; },
+	);
+
+	browser.handleInput("down");
+	browser.handleInput("j");
+	browser.handleInput("\x04");
+	assert.equal(browser.getSelectedTaskId(), "task-6");
+	browser.handleInput("\x15");
+	assert.equal(browser.getSelectedTaskId(), "task-3");
+	browser.handleInput("\x04");
+	assert.equal(browser.getSelectedTaskId(), "task-6");
+	browser.handleInput("g");
+	browser.handleInput("G");
+	assert.equal(browser.getSelectedTaskId(), "task-10");
+	const lines = browser.render(50).map(stripVTControlCharacters);
+	assert.equal(lines.length, 9);
+	assert.match(lines[0], /10\/10/);
+	assert.equal(lines.some((line) => line.includes("#1 Task 1")), false);
+	assert.equal(lines.some((line) => line.includes("Task 10")), true);
+	browser.handleInput("g");
+	browser.handleInput("g");
+	assert.equal(browser.getSelectedTaskId(), "task-1");
+	browser.handleInput("q");
+	assert.equal(renders, 7);
+	assert.equal(closes, 1);
 });
 
 test("renders descendants immediately after their parent", () => {
