@@ -285,7 +285,7 @@ function taskLine(
 			case "in_progress": glyph = theme.fg("accent", "◼"); break;
 			case "pending": glyph = theme.fg("dim", "◻"); break;
 			case "failed": glyph = theme.fg("error", "✖"); break;
-			case "stopped": glyph = theme.fg("dim", "■"); break;
+			case "stopped": glyph = "■"; break;
 		}
 	}
 

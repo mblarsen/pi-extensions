@@ -292,7 +292,8 @@ test("renders completed and stopped tasks with dim text and labels", () => {
 
 	new TaskBarComponent(() => state, () => "✳", theme as never).render(60);
 
-	assert.ok(styled.some(([color, text]) => color === "dim" && text.includes("#2 Abandoned work")));
+	assert.ok(styled.some(([color, text]) => color === "dim" && text.includes("■ #2 Abandoned work")));
+	assert.ok(!styled.some(([color, text]) => color === "dim" && text === "■"));
 	assert.equal(styled.filter(([color, text]) => color === "dim" && text === "[task]").length, 2);
 	assert.ok(!styled.some(([color, text]) => color === taskLabelColor("task") && text === "[task]"));
 });
