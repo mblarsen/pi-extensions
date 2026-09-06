@@ -1,5 +1,11 @@
 # @mblarsen/pi-task-ui
 
+## 0.2.1
+
+### Patch Changes
+
+- 519a4a3: Keep stopped task text dim after rendering its status icon.
+
 ## 0.2.0
 
 ### Minor Changes
