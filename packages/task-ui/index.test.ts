@@ -362,9 +362,10 @@ test("right-aligns labels and assigns stable distinct theme colors", () => {
 	assert.ok(styled.some(([color, text]) => color === taskLabelColor("research") && text === "[research]"));
 });
 
-test("renders completed and stopped tasks with dim text and labels", () => {
+test("renders every terminal task with dim text and labels", () => {
 	const state = createTasks(createInitialTaskUiState(), [
 		{ id: "done", subject: "Finished work", label: "task", status: "completed" },
+		{ id: "failed", subject: "Failed work", label: "task", status: "failed" },
 		{ id: "abandoned", subject: "Abandoned work", label: "task", status: "stopped" },
 	]).state;
 	const styled: Array<[string, string]> = [];
@@ -379,9 +380,10 @@ test("renders completed and stopped tasks with dim text and labels", () => {
 
 	new TaskBarComponent(() => state, () => "✳", theme as never).render(60);
 
-	assert.ok(styled.some(([color, text]) => color === "dim" && text.includes("■ #2 Abandoned work")));
+	assert.ok(styled.some(([color, text]) => color === "dim" && text.includes("#2 Failed work")));
+	assert.ok(styled.some(([color, text]) => color === "dim" && text.includes("■ #3 Abandoned work")));
 	assert.ok(!styled.some(([color, text]) => color === "dim" && text === "■"));
-	assert.equal(styled.filter(([color, text]) => color === "dim" && text === "[task]").length, 2);
+	assert.equal(styled.filter(([color, text]) => color === "dim" && text === "[task]").length, 3);
 	assert.ok(!styled.some(([color, text]) => color === taskLabelColor("task") && text === "[task]"));
 });
 
