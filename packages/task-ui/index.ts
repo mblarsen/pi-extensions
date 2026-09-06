@@ -1,6 +1,13 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, visibleWidth, type OverlayHandle } from "@earendil-works/pi-tui";
+import {
+	matchesKey,
+	Text,
+	truncateToWidth,
+	visibleWidth,
+	type KeybindingsManager,
+	type OverlayHandle,
+} from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
 	TASK_STATUSES,
@@ -295,7 +302,7 @@ function taskLine(
 		return `${indent}${COMPLETED_ICON} ${theme.fg("dim", theme.strikethrough(taskLabel))}`;
 	}
 	const content = `${indent}${glyph} ${taskLabel}`;
-	if (task.status === "failed") return theme.fg("error", content);
+	if (task.status === "failed") return `${indent}${theme.fg("error", "✖")} ${theme.fg("dim", taskLabel)}`;
 	if (task.status === "pending") return theme.fg("muted", content);
 	if (task.status === "stopped") return theme.fg("dim", content);
 	return focused ? theme.bold(content) : content;
@@ -359,7 +366,7 @@ export class TaskBarComponent {
 						task.label,
 						width,
 						this.theme,
-						task.status === "completed" || task.status === "stopped",
+						task.status === "completed" || task.status === "failed" || task.status === "stopped",
 					));
 				}
 			}
@@ -370,6 +377,133 @@ export class TaskBarComponent {
 	}
 
 	invalidate(): void {}
+}
+
+export class TaskBrowserComponent {
+	private selectedTaskId: string | undefined;
+	private scrollOffset = 0;
+	private awaitingG = false;
+	private readonly getState: () => TaskUiState;
+	private readonly getSpinnerFrame: () => string;
+	private readonly getViewportHeight: () => number;
+	private readonly theme: Theme;
+	private readonly keybindings: KeybindingsManager;
+	private readonly requestRender: () => void;
+	private readonly onClose: () => void;
+
+	constructor(
+		getState: () => TaskUiState,
+		getSpinnerFrame: () => string,
+		getViewportHeight: () => number,
+		theme: Theme,
+		keybindings: KeybindingsManager,
+		requestRender: () => void,
+		onClose: () => void,
+	) {
+		this.getState = getState;
+		this.getSpinnerFrame = getSpinnerFrame;
+		this.getViewportHeight = getViewportHeight;
+		this.theme = theme;
+		this.keybindings = keybindings;
+		this.requestRender = requestRender;
+		this.onClose = onClose;
+		const state = this.getState();
+		const ordered = orderTasksForDisplay(state.tasks);
+		this.selectedTaskId = ordered.some((task) => task.id === state.focusedTaskId)
+			? state.focusedTaskId
+			: ordered[0]?.id;
+	}
+
+	getSelectedTaskId(): string | undefined {
+		return this.selectedTaskId;
+	}
+
+	handleInput(data: string): void {
+		if (this.keybindings.matches(data, "tui.select.cancel") || data === "q") {
+			this.onClose();
+			return;
+		}
+
+		const tasks = orderTasksForDisplay(this.getState().tasks);
+		if (!tasks.length) return;
+		const currentIndex = Math.max(0, tasks.findIndex((task) => task.id === this.selectedTaskId));
+		const halfPage = Math.max(1, Math.floor(this.getListCapacity() / 2));
+		let nextIndex = currentIndex;
+
+		if (this.awaitingG) {
+			this.awaitingG = false;
+			if (data === "g") nextIndex = 0;
+			else if (data === "G") nextIndex = tasks.length - 1;
+			else return;
+		} else if (data === "g") {
+			this.awaitingG = true;
+			return;
+		} else if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
+			nextIndex = Math.max(0, currentIndex - 1);
+		} else if (this.keybindings.matches(data, "tui.select.down") || data === "j") {
+			nextIndex = Math.min(tasks.length - 1, currentIndex + 1);
+		} else if (matchesKey(data, "ctrl+u")) {
+			nextIndex = Math.max(0, currentIndex - halfPage);
+		} else if (matchesKey(data, "ctrl+d")) {
+			nextIndex = Math.min(tasks.length - 1, currentIndex + halfPage);
+		} else {
+			return;
+		}
+
+		this.selectedTaskId = tasks[nextIndex]?.id;
+		this.requestRender();
+	}
+
+	render(width: number): string[] {
+		const state = this.getState();
+		const tasks = orderTasksForDisplay(state.tasks);
+		let selectedIndex = tasks.findIndex((task) => task.id === this.selectedTaskId);
+		if (selectedIndex < 0 && tasks.length) {
+			selectedIndex = 0;
+			this.selectedTaskId = tasks[0]?.id;
+		}
+
+		const capacity = this.getListCapacity();
+		if (selectedIndex < this.scrollOffset) this.scrollOffset = selectedIndex;
+		if (selectedIndex >= this.scrollOffset + capacity) this.scrollOffset = selectedIndex - capacity + 1;
+		this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, Math.max(0, tasks.length - capacity)));
+
+		const position = selectedIndex >= 0 ? `${selectedIndex + 1}/${tasks.length}` : "0/0";
+		const title = ` Tasks · ${position} `;
+		const topFill = Math.max(0, width - visibleWidth(title) - 2);
+		const lines = [this.theme.fg("borderAccent", `╭${title}${"─".repeat(topFill)}╮`)];
+
+		if (!tasks.length) {
+			lines.push(framedRow(this.theme.fg("muted", "No projected tasks"), width, this.theme));
+		} else {
+			for (const [visibleIndex, task] of tasks.slice(this.scrollOffset, this.scrollOffset + capacity).entries()) {
+				const taskIndex = this.scrollOffset + visibleIndex;
+				const selected = taskIndex === selectedIndex;
+				const prefix = selected ? this.theme.fg("accent", "› ") : "  ";
+				lines.push(framedTaskRow(
+					prefix + taskLine(task, state.tasks, selected, this.getSpinnerFrame(), this.theme),
+					task.label,
+					width,
+					this.theme,
+					task.status === "completed" || task.status === "failed" || task.status === "stopped",
+				));
+			}
+		}
+
+		lines.push(framedRow(
+			this.theme.fg("dim", "↑↓/jk move · Ctrl-U/D half-page · gg/gG jump · Esc/q close"),
+			width,
+			this.theme,
+		));
+		lines.push(this.theme.fg("borderAccent", `╰${"─".repeat(Math.max(0, width - 2))}╯`));
+		return lines.map((line) => truncateToWidth(line, width, ""));
+	}
+
+	invalidate(): void {}
+
+	private getListCapacity(): number {
+		return Math.max(1, this.getViewportHeight() - 3);
+	}
 }
 
 function renderToolCall(name: string, detail: string | undefined, theme: Theme): Text {
@@ -394,6 +528,8 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 	let overlayHandle: OverlayHandle | undefined;
 	let overlayVisible = true;
 	let requestRender: (() => void) | undefined;
+	let browseRequestRender: (() => void) | undefined;
+	let browseOpen = false;
 	let sessionActive = false;
 	let spinnerFrame = 0;
 	let animationTimer: ReturnType<typeof setInterval> | undefined;
@@ -405,8 +541,13 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		spinnerFrame = 0;
 	};
 
+	const requestAllRenders = () => {
+		requestRender?.();
+		browseRequestRender?.();
+	};
+
 	const syncAnimation = () => {
-		const shouldAnimate = sessionActive && overlayVisible && state.tasks.some((task) => task.executing);
+		const shouldAnimate = sessionActive && (overlayVisible || browseOpen) && state.tasks.some((task) => task.executing);
 		if (!shouldAnimate) {
 			stopAnimation();
 			return;
@@ -414,13 +555,13 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		if (animationTimer) return;
 		animationTimer = setInterval(() => {
 			spinnerFrame = (spinnerFrame + 1) % SPINNER_FRAMES.length;
-			requestRender?.();
+			requestAllRenders();
 		}, 500);
 	};
 
 	const publishState = () => {
 		if (sessionActive) pi.appendEntry(STATE_ENTRY_TYPE, cloneTaskUiState(state));
-		requestRender?.();
+		requestAllRenders();
 		syncAnimation();
 	};
 
@@ -465,6 +606,50 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 			requestRender = undefined;
 			stopAnimation();
 		});
+	};
+
+	const showBrowser = async (ctx: ExtensionContext) => {
+		if (ctx.mode !== "tui") {
+			ctx.ui.notify("Task browser requires interactive mode", "warning");
+			return;
+		}
+		if (!state.tasks.length) {
+			ctx.ui.notify("No projected tasks to browse", "info");
+			return;
+		}
+
+		const restoreSidebar = overlayVisible && overlayHandle !== undefined && !overlayHandle.isHidden();
+		if (restoreSidebar) overlayHandle?.setHidden(true);
+		browseOpen = true;
+		syncAnimation();
+		try {
+			await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
+				browseRequestRender = () => tui.requestRender();
+				return new TaskBrowserComponent(
+					() => state,
+					() => SPINNER_FRAMES[spinnerFrame],
+					() => Math.max(4, Math.floor(tui.terminal.rows * 0.9)),
+					theme,
+					keybindings,
+					() => tui.requestRender(),
+					() => done(),
+				);
+			}, {
+				overlay: true,
+				overlayOptions: {
+					anchor: "center",
+					width: "92%",
+					maxHeight: "90%",
+					margin: 1,
+				},
+			});
+		} finally {
+			browseOpen = false;
+			browseRequestRender = undefined;
+			if (restoreSidebar && overlayVisible) overlayHandle?.setHidden(false);
+			requestRender?.();
+			syncAnimation();
+		}
 	};
 
 	const toggleOverlay = (ctx: ExtensionContext) => {
@@ -710,9 +895,32 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		handler: async (ctx) => toggleOverlay(ctx),
 	});
 
+	pi.registerShortcut("alt+shift+u", {
+		description: "Open the read-only task browser",
+		handler: async (ctx) => showBrowser(ctx),
+	});
+
 	pi.registerCommand("task-ui", {
-		description: "Toggle the non-capturing task sidebar",
-		handler: async (_args, ctx) => toggleOverlay(ctx),
+		description: "Toggle the task sidebar, or use /task-ui browse for the full task browser",
+		getArgumentCompletions: (prefix) => {
+			const items = [
+				{ value: "browse", label: "browse", description: "Open the full task browser" },
+				{ value: "toggle", label: "toggle", description: "Toggle the task sidebar" },
+			].filter((item) => item.value.startsWith(prefix.trim().toLowerCase()));
+			return items.length ? items : null;
+		},
+		handler: async (args, ctx) => {
+			const action = args.trim().toLowerCase();
+			if (!action || action === "toggle") {
+				toggleOverlay(ctx);
+				return;
+			}
+			if (action === "browse") {
+				await showBrowser(ctx);
+				return;
+			}
+			ctx.ui.notify("Usage: /task-ui [toggle|browse]", "warning");
+		},
 	});
 
 	pi.on("tool_result", async (event, ctx) => {
@@ -753,6 +961,8 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		}
 		overlayHandle = undefined;
 		requestRender = undefined;
+		browseRequestRender = undefined;
+		browseOpen = false;
 		overlayVisible = true;
 		showOverlay(ctx);
 		syncAnimation();
@@ -766,7 +976,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 			const restored = normalizeStoredTaskUiState(entry.data);
 			if (restored) state = restored;
 		}
-		requestRender?.();
+		requestAllRenders();
 		syncAnimation();
 	});
 
@@ -778,5 +988,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		overlayHandle?.hide();
 		overlayHandle = undefined;
 		requestRender = undefined;
+		browseRequestRender = undefined;
+		browseOpen = false;
 	});
 }
