@@ -22,19 +22,19 @@ pi install npm:@mblarsen/pi-task-ui
 
 ## UI
 
-The sidebar opens automatically as a non-capturing overlay on the right. Toggle it with `Alt+U` or:
+The sidebar opens automatically as a non-capturing overlay on the right. Use `Alt+U` (Option+U on macOS), `/task-ui`, or `/task-ui cycle` to cycle sidebar → browse → off → sidebar.
+
+Use a target command to open or hide a view directly:
 
 ```text
-/task-ui
-```
-
-Open the read-only task browser with `Alt+Shift+U` or:
-
-```text
+/task-ui sidebar
 /task-ui browse
+/task-ui hide
 ```
 
-The browser uses most of the terminal and shows all projected tasks in stable hierarchy and number order, including terminal history. It starts on the focused task and scrolls as you move through the complete list. Use `↑`/`↓` or `j`/`k` to move, `Ctrl-U`/`Ctrl-D` to move by half a viewport, `gg`/`gG` to jump to the first or last task, and `Esc` or `q` to close it. Browse mode does not change the task projection.
+You can also open the read-only task browser with `Alt+Shift+U`.
+
+The browser uses most of the terminal and shows all projected tasks in stable hierarchy and number order, including terminal history. It starts on the focused task and scrolls as you move through the complete list. Use `↑`/`↓` or `j`/`k` to move, `Ctrl-U`/`Ctrl-D` to move by half a viewport, `gg`/`gG` to jump to the first or last task, and `Esc` or `q` to return to the sidebar. Press `Alt+U` in browse mode to hide both views. Browse mode does not change the task projection.
 
 The bar hides responsively below 72 terminal columns. Its `Tasks` panel shows numbered work, nested subtasks, blockers, terminal history, optional right-aligned labels, and projected execution telemetry without a summary or progress bar. Subtasks use stable hierarchical labels such as `#2.1` and `#2.1.1` and render immediately beneath their parent in subtask order. Active and pending work share one stable list capped at the first seven items, so the earliest work retains priority; overflow is summarized as `… and N more`. `history` shows the latest three terminal transitions newest-first and does not reorder them after metadata or output edits. When only history remains, a muted `All done!` message appears above it.
 
