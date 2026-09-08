@@ -74,13 +74,115 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 	assert.ok(tools.every((tool) => /projection|UI/i.test(tool.description)));
 	assert.deepEqual(commands, ["task-ui"]);
 	assert.deepEqual(getArgumentCompletions?.("b")?.map((item) => item.value), ["browse"]);
-	assert.deepEqual(getArgumentCompletions?.("")?.map((item) => item.value), ["browse", "toggle"]);
+	assert.deepEqual(getArgumentCompletions?.("")?.map((item) => item.value), ["browse", "sidebar", "hide", "cycle"]);
 	assert.deepEqual(shortcuts, ["alt+u", "alt+shift+u"]);
 	assert.deepEqual(lifecycleEvents, ["tool_result", "turn_start", "session_start", "session_tree", "session_shutdown"]);
 	assert.deepEqual(adapterEvents, Object.values(TASK_UI_EVENTS));
 	assert.equal(lifecycleEvents.includes("before_agent_start"), false);
 	assert.equal(lifecycleEvents.includes("tool_call"), false);
 	assert.equal(lifecycleEvents.includes("agent_start"), false);
+});
+
+test("cycles sidebar → browse → off and supports named view commands", async () => {
+	const { pi, tools } = extensionHarness();
+	type ShortcutHandler = (ctx: never) => Promise<void>;
+	type CommandHandler = (args: string, ctx: never) => Promise<void>;
+	const shortcuts = new Map<string, ShortcutHandler>();
+	const lifecycle = new Map<string, (event: never, ctx: never) => Promise<void>>();
+	let taskUiCommand: CommandHandler | undefined;
+	pi.registerShortcut = ((key: string, options: { handler: ShortcutHandler }) => shortcuts.set(key, options.handler)) as never;
+	pi.registerCommand = ((_name: string, options: { handler: CommandHandler }) => { taskUiCommand = options.handler; }) as never;
+	pi.on = ((event: string, handler: (event: never, ctx: never) => Promise<void>) => lifecycle.set(event, handler)) as never;
+	taskUiExtension(pi);
+	let sidebarHidden = false;
+	let browser: TaskBrowserComponent | undefined;
+	let browserCount = 0;
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const ctx = {
+		mode: "tui",
+		sessionManager: { getBranch: () => [] },
+		ui: {
+			notify() {},
+			custom(factory: (...args: never[]) => TaskBarComponent | TaskBrowserComponent, options: {
+				onHandle?: (handle: unknown) => void;
+				overlayOptions: { nonCapturing?: boolean };
+			}) {
+				return new Promise((resolve) => {
+					const component = factory(
+						{ requestRender() {}, terminal: { rows: 24 } } as never,
+						theme as never,
+						{ matches: (data: string, binding: string) => binding === "tui.select.cancel" && data === "\x1b" } as never,
+						resolve as never,
+					);
+					if (options.overlayOptions.nonCapturing) {
+						options.onHandle?.({
+							setHidden: (hidden: boolean) => { sidebarHidden = hidden; },
+							isHidden: () => sidebarHidden,
+							hide() {},
+						});
+					} else {
+						browser = component as TaskBrowserComponent;
+						browserCount += 1;
+					}
+				});
+			},
+		},
+	};
+	pi.appendEntry = () => {};
+	await lifecycle.get("session_start")!({} as never, ctx as never);
+	await tools.find((tool) => tool.name === "task_ui_create")!.execute("test", { subject: "Task" });
+	const cycle = () => shortcuts.get("alt+u")!(ctx as never);
+	assert.equal(sidebarHidden, false);
+	let browsing = cycle();
+	assert.equal(sidebarHidden, true);
+	browser!.handleInput("\x1bu");
+	await browsing;
+	assert.equal(sidebarHidden, true);
+	await cycle();
+	assert.equal(sidebarHidden, false);
+	assert.equal(browserCount, 1);
+
+	for (const key of ["q", "\x1b"]) {
+		browsing = cycle();
+		assert.equal(sidebarHidden, true);
+		browser!.handleInput(key);
+		await browsing;
+		assert.equal(sidebarHidden, false);
+	}
+
+	// The registered shortcut also closes browse if Pi dispatches it globally.
+	browsing = cycle();
+	await cycle();
+	await browsing;
+	assert.equal(sidebarHidden, true);
+	browsing = shortcuts.get("alt+shift+u")!(ctx as never);
+	browser!.handleInput("q");
+	await browsing;
+	assert.equal(sidebarHidden, false);
+
+	await taskUiCommand!("hide", ctx as never);
+	assert.equal(sidebarHidden, true);
+	await taskUiCommand!("sidebar", ctx as never);
+	assert.equal(sidebarHidden, false);
+
+	browsing = taskUiCommand!("browse", ctx as never);
+	assert.equal(sidebarHidden, true);
+	await taskUiCommand!("sidebar", ctx as never);
+	await browsing;
+	assert.equal(sidebarHidden, false);
+
+	browsing = taskUiCommand!("cycle", ctx as never);
+	assert.equal(sidebarHidden, true);
+	await taskUiCommand!("cycle", ctx as never);
+	await browsing;
+	assert.equal(sidebarHidden, true);
+	await taskUiCommand!("cycle", ctx as never);
+	assert.equal(sidebarHidden, false);
+	await lifecycle.get("session_shutdown")!({} as never, ctx as never);
 });
 
 test("classifies only successful checkpoint tool results", () => {

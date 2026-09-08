@@ -389,7 +389,7 @@ export class TaskBrowserComponent {
 	private readonly theme: Theme;
 	private readonly keybindings: KeybindingsManager;
 	private readonly requestRender: () => void;
-	private readonly onClose: () => void;
+	private readonly onClose: (target: "sidebar" | "off") => void;
 
 	constructor(
 		getState: () => TaskUiState,
@@ -398,7 +398,7 @@ export class TaskBrowserComponent {
 		theme: Theme,
 		keybindings: KeybindingsManager,
 		requestRender: () => void,
-		onClose: () => void,
+		onClose: (target: "sidebar" | "off") => void,
 	) {
 		this.getState = getState;
 		this.getSpinnerFrame = getSpinnerFrame;
@@ -419,8 +419,12 @@ export class TaskBrowserComponent {
 	}
 
 	handleInput(data: string): void {
+		if (matchesKey(data, "alt+u")) {
+			this.onClose("off");
+			return;
+		}
 		if (this.keybindings.matches(data, "tui.select.cancel") || data === "q") {
-			this.onClose();
+			this.onClose("sidebar");
 			return;
 		}
 
@@ -491,7 +495,7 @@ export class TaskBrowserComponent {
 		}
 
 		lines.push(framedRow(
-			this.theme.fg("dim", "↑↓/jk move · Ctrl-U/D half-page · gg/gG jump · Esc/q close"),
+			this.theme.fg("dim", "↑↓/jk move · Ctrl-U/D half-page · gg/gG jump · Esc/q sidebar · Alt-U off"),
 			width,
 			this.theme,
 		));
@@ -530,6 +534,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 	let requestRender: (() => void) | undefined;
 	let browseRequestRender: (() => void) | undefined;
 	let browseOpen = false;
+	let closeBrowser: ((target: "sidebar" | "off") => void) | undefined;
 	let sessionActive = false;
 	let spinnerFrame = 0;
 	let animationTimer: ReturnType<typeof setInterval> | undefined;
@@ -609,6 +614,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 	};
 
 	const showBrowser = async (ctx: ExtensionContext) => {
+		if (browseOpen) return;
 		if (ctx.mode !== "tui") {
 			ctx.ui.notify("Task browser requires interactive mode", "warning");
 			return;
@@ -618,12 +624,13 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 			return;
 		}
 
-		const restoreSidebar = overlayVisible && overlayHandle !== undefined && !overlayHandle.isHidden();
-		if (restoreSidebar) overlayHandle?.setHidden(true);
+		let restoreSidebar = overlayVisible;
+		overlayHandle?.setHidden(true);
 		browseOpen = true;
 		syncAnimation();
 		try {
-			await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
+			const target = await ctx.ui.custom<"sidebar" | "off">((tui, theme, keybindings, done) => {
+				closeBrowser = done;
 				browseRequestRender = () => tui.requestRender();
 				return new TaskBrowserComponent(
 					() => state,
@@ -632,7 +639,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 					theme,
 					keybindings,
 					() => tui.requestRender(),
-					() => done(),
+					done,
 				);
 			}, {
 				overlay: true,
@@ -643,29 +650,53 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 					margin: 1,
 				},
 			});
+			restoreSidebar = target !== "off";
 		} finally {
 			browseOpen = false;
+			closeBrowser = undefined;
 			browseRequestRender = undefined;
-			if (restoreSidebar && overlayVisible) overlayHandle?.setHidden(false);
+			overlayVisible = restoreSidebar;
+			if (restoreSidebar) showOverlay(ctx);
+			else overlayHandle?.setHidden(true);
 			requestRender?.();
 			syncAnimation();
 		}
 	};
 
-	const toggleOverlay = (ctx: ExtensionContext) => {
+	const hideTaskUi = (ctx: ExtensionContext) => {
 		if (ctx.mode !== "tui") {
 			ctx.ui.notify("Task UI requires interactive mode", "warning");
 			return;
 		}
-		if (!overlayHandle) {
-			showOverlay(ctx);
-			ctx.ui.notify("Task UI shown", "info");
+		if (browseOpen) {
+			closeBrowser?.("off");
 			return;
 		}
-		overlayVisible = !overlayVisible;
-		overlayHandle.setHidden(!overlayVisible);
+		overlayVisible = false;
+		overlayHandle?.setHidden(true);
 		syncAnimation();
-		ctx.ui.notify(`Task UI ${overlayVisible ? "shown" : "hidden"}`, "info");
+	};
+
+	const showSidebar = (ctx: ExtensionContext) => {
+		if (ctx.mode !== "tui") {
+			ctx.ui.notify("Task UI requires interactive mode", "warning");
+			return;
+		}
+		if (browseOpen) {
+			closeBrowser?.("sidebar");
+			return;
+		}
+		showOverlay(ctx);
+	};
+
+	const cycleTaskUi = async (ctx: ExtensionContext) => {
+		if (browseOpen) {
+			hideTaskUi(ctx);
+		} else if (!overlayVisible) {
+			showSidebar(ctx);
+		} else {
+			await showBrowser(ctx);
+		}
 	};
 
 	const persistMutation = (next: TaskUiState): TaskUiState => {
@@ -891,8 +922,8 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerShortcut("alt+u", {
-		description: "Toggle the non-capturing task sidebar",
-		handler: async (ctx) => toggleOverlay(ctx),
+		description: "Cycle tasks: sidebar, browse, off",
+		handler: async (ctx) => cycleTaskUi(ctx),
 	});
 
 	pi.registerShortcut("alt+shift+u", {
@@ -901,25 +932,35 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("task-ui", {
-		description: "Toggle the task sidebar, or use /task-ui browse for the full task browser",
+		description: "Show, hide, browse, or cycle the task UI",
 		getArgumentCompletions: (prefix) => {
 			const items = [
 				{ value: "browse", label: "browse", description: "Open the full task browser" },
-				{ value: "toggle", label: "toggle", description: "Toggle the task sidebar" },
+				{ value: "sidebar", label: "sidebar", description: "Show the task sidebar" },
+				{ value: "hide", label: "hide", description: "Hide the task UI" },
+				{ value: "cycle", label: "cycle", description: "Cycle sidebar, browse, off" },
 			].filter((item) => item.value.startsWith(prefix.trim().toLowerCase()));
 			return items.length ? items : null;
 		},
 		handler: async (args, ctx) => {
 			const action = args.trim().toLowerCase();
-			if (!action || action === "toggle") {
-				toggleOverlay(ctx);
+			if (!action || action === "cycle") {
+				await cycleTaskUi(ctx);
 				return;
 			}
 			if (action === "browse") {
 				await showBrowser(ctx);
 				return;
 			}
-			ctx.ui.notify("Usage: /task-ui [toggle|browse]", "warning");
+			if (action === "sidebar") {
+				showSidebar(ctx);
+				return;
+			}
+			if (action === "hide") {
+				hideTaskUi(ctx);
+				return;
+			}
+			ctx.ui.notify("Usage: /task-ui [browse|sidebar|hide|cycle]", "warning");
 		},
 	});
 
