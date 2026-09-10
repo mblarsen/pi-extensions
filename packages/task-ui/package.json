@@ -11,6 +11,7 @@
   "files": [
     "index.ts",
     "core.ts",
+    "markdown.ts",
     "README.md",
     "assets",
     "skill"
@@ -37,5 +38,8 @@
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
-  "author": "Michael Bøcker-Larsen"
+  "author": "Michael Bøcker-Larsen",
+  "dependencies": {
+    "github-slugger": "^2.0.0"
+  }
 }

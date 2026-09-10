@@ -35,6 +35,20 @@ Labels render right-aligned. The same label receives the same theme-derived colo
 
 Do not invent dependencies, progress, token counts, or backend IDs.
 
+## Task descriptions
+
+Add a description when the subject alone does not contain enough context to resume the task.
+
+Write one short plain-text paragraph for both the user and a future agent. Include the intended outcome and only the essential context, constraints, or decisions needed to continue.
+
+Do not use Markdown, lists, logs, progress updates, or unnecessary line breaks. Do not repeat the subject, status, owner, or dependencies.
+
+For example:
+
+```text
+Generate a human-readable snapshot of all projected tasks. Preserve hierarchy and link each declared dependency to its task heading.
+```
+
 ## Parent tasks and subtasks
 
 Set `parent_id` to nest a task beneath an existing parent. Batch creation may include parents and their descendants together.
@@ -156,6 +170,18 @@ Do not call `task_ui_list({ scope: "all" })` and filter the returned tasks yours
 
 Use `task_ui_output` only for concise, user-relevant projected output. Do not stream large logs into the sidebar.
 
+## Export Markdown
+
+Call `task_ui_to_md({})` when the user needs a readable Markdown handoff of the complete projection. The tool writes a unique file in the system temporary directory by default.
+
+Pass `path` when the user needs a specific location. The tool returns the absolute path to the generated file.
+
+If the target exists, ask the user to confirm before replacement. Call the tool again with the same `path` and `overwrite: true` only after that confirmation.
+
+The extension generates numbered headings, descriptions, statuses, and local dependency links. The export includes every task status.
+
+The export excludes labels, focus, progress, owners, timestamps, task output, and execution telemetry.
+
 ## Follow tool-result guidance
 
 Tool results can contain two separate agent-oriented fields:
@@ -170,6 +196,7 @@ The structured `details` additions are:
 | `create` | `suggestedNextTask`, `suggestedAction` |
 | `batch_create` | `createdIds`, `suggestedNextTask`, `suggestedAction` |
 | `list` | `selector`, full-projection `counts`, `suggestedNextTask`, `suggestedAction` |
+| `to_md` | output `path`, ordered `tasks`, full-projection `counts` |
 | `get` | `blockers`, `isBlocked`, `suggestedAction` |
 | `get_dashboard` | `suggestedAction`; the dashboard already contains `next` |
 | `update` | `changedFields`, `newlyReady`, `suggestedAction`; terminal transitions also include `suggestedNextTask` |

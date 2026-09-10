@@ -23,6 +23,7 @@ import {
 	getTaskDisplayNumber,
 	listTasks,
 	normalizeStoredTaskUiState,
+	orderTasksForDisplay,
 	removeTask,
 	replaceExternalTasks,
 	setFocusedTask,
@@ -36,6 +37,9 @@ import {
 	type TaskStatus,
 	type TaskUiState,
 } from "./core.ts";
+import { writeTaskUiMarkdown } from "./markdown.ts";
+
+export { orderTasksForDisplay } from "./core.ts";
 
 const STATE_ENTRY_TYPE = "task-ui-state";
 const OVERLAY_MIN_TERMINAL_WIDTH = 72;
@@ -73,6 +77,7 @@ type TaskToolDetails = {
 	detachedChildren?: string[];
 	removedCount?: number;
 	reason?: string;
+	path?: string;
 };
 
 type SnapshotEvent = { tasks: ExternalTaskInput[]; focusedTaskId?: string };
@@ -316,35 +321,6 @@ function formatElapsed(startedAt: string | undefined, now: number): string | und
 	const minutes = Math.floor((totalSeconds % 3_600) / 60);
 	const seconds = totalSeconds % 60;
 	return hours > 0 ? `${hours}h ${minutes}m` : minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-}
-
-export function orderTasksForDisplay(tasks: TaskRecord[]): TaskRecord[] {
-	const includedIds = new Set(tasks.map((task) => task.id));
-	const children = new Map<string, TaskRecord[]>();
-	const roots: TaskRecord[] = [];
-
-	for (const task of tasks) {
-		if (task.parentId && includedIds.has(task.parentId)) {
-			const siblings = children.get(task.parentId) ?? [];
-			siblings.push(task);
-			children.set(task.parentId, siblings);
-		} else {
-			roots.push(task);
-		}
-	}
-
-	const byNumber = (left: TaskRecord, right: TaskRecord) =>
-		(left.subtaskNumber ?? left.number) - (right.subtaskNumber ?? right.number) || left.number - right.number;
-	roots.sort((left, right) => left.number - right.number);
-	for (const siblings of children.values()) siblings.sort(byNumber);
-
-	const ordered: TaskRecord[] = [];
-	const visit = (task: TaskRecord) => {
-		ordered.push(task);
-		for (const child of children.get(task.id) ?? []) visit(child);
-	};
-	for (const root of roots) visit(root);
-	return ordered;
 }
 
 export function blockerText(task: TaskRecord, tasks: TaskRecord[]): string | undefined {
@@ -605,6 +581,9 @@ function renderToolResult(result: { content: Array<{ type: string; text?: string
 	if (details?.task) return new Text(theme.fg("success", "✓ ") + theme.fg("muted", taskSummary(details.task)), 0, 0);
 	if (details?.dashboard) {
 		return new Text(theme.fg("muted", `${details.dashboard.active.length} active · next ${details.dashboard.next ? `#${details.dashboard.next.number}` : "none"}`), 0, 0);
+	}
+	if (details?.action === "to_md") {
+		return new Text(theme.fg("muted", `Exported ${details.tasks?.length ?? 0} projected task(s) to ${details.path}`), 0, 0);
 	}
 	if (details?.tasks) return new Text(theme.fg("muted", `${details.tasks.length} projected task(s)`), 0, 0);
 	const first = result.content[0];
@@ -887,6 +866,28 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 			};
 		},
 		renderCall: (args, theme) => renderToolCall("task_ui_list", args.scope ?? args.status, theme),
+		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
+	});
+
+	pi.registerTool({
+		name: "task_ui_to_md",
+		label: "Task UI to Markdown",
+		description: "Write the complete task-ui projection to a Markdown file. This does not modify state.",
+		promptSnippet: "Write the complete task-ui projection to a Markdown file",
+		executionMode: "sequential",
+		parameters: Type.Object({
+			path: Type.Optional(Type.String({ description: "Output path; defaults to a unique file in the system temporary directory" })),
+			overwrite: Type.Optional(Type.Boolean({ description: "Replace an existing file after the user confirms" })),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			const tasks = orderTasksForDisplay(listTasks(state, { scope: "all" }));
+			const path = await writeTaskUiMarkdown(state, { path: params.path, overwrite: params.overwrite });
+			return {
+				content: [{ type: "text", text: path }],
+				details: { action: "to_md", path, tasks, counts: taskCounts(state.tasks) } as TaskToolDetails,
+			};
+		},
+		renderCall: (_args, theme) => renderToolCall("task_ui_to_md", undefined, theme),
 		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
 	});
 

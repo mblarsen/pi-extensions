@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -13,12 +16,16 @@ import taskUiExtension, {
 	taskLabelColor,
 } from "./index.ts";
 
+type RegisteredToolResult = {
+	content: Array<{ type: string; text: string }>;
+	details?: Record<string, unknown>;
+};
+
 type RegisteredTool = {
 	name: string;
-	execute: (id: string, params: Record<string, unknown>) => Promise<{
-		content: Array<{ type: string; text: string }>;
-		details?: Record<string, unknown>;
-	}>;
+	parameters?: { properties?: Record<string, unknown> };
+	execute: (id: string, params: Record<string, unknown>) => Promise<RegisteredToolResult>;
+	renderResult?: (result: RegisteredToolResult, options: unknown, theme: unknown) => { render(width: number): string[] };
 };
 
 function extensionHarness(): { pi: ExtensionAPI; tools: RegisteredTool[] } {
@@ -67,6 +74,7 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 		"task_ui_create",
 		"task_ui_batch_create",
 		"task_ui_list",
+		"task_ui_to_md",
 		"task_ui_get",
 		"task_ui_update",
 		"task_ui_output",
@@ -84,6 +92,62 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 	assert.equal(lifecycleEvents.includes("before_agent_start"), false);
 	assert.equal(lifecycleEvents.includes("tool_call"), false);
 	assert.equal(lifecycleEvents.includes("agent_start"), false);
+});
+
+test("writes the complete projection as Markdown without changing state", async () => {
+	const { pi, tools } = extensionHarness();
+	taskUiExtension(pi);
+	const tool = (name: string) => tools.find((item) => item.name === name)!;
+	await tool("task_ui_batch_create").execute("create", {
+		tasks: [
+			{ id: "parent", subject: "Parent", description: "Parent details.", status: "completed" },
+			{ id: "child", subject: "Child", parent_id: "parent", blocked_by: ["parent"] },
+		],
+	});
+
+	const directory = await mkdtemp(join(tmpdir(), "task-ui-tool-"));
+	const outputPath = join(directory, "tasks.md");
+	try {
+		const markdownTool = tool("task_ui_to_md");
+		assert.deepEqual(Object.keys(markdownTool.parameters?.properties ?? {}), ["path", "overwrite"]);
+		const first = await markdownTool.execute("dump", { path: outputPath });
+		const expectedMarkdown = `# 1. Parent
+
+Parent details.
+
+**Status:** completed
+
+## 1.1. Child
+
+**Status:** pending · **Dependencies:** [1. Parent](#1-parent)`;
+
+		assert.equal(first.content[0].text, outputPath);
+		assert.equal(await readFile(outputPath, "utf8"), expectedMarkdown);
+		await assert.rejects(
+			markdownTool.execute("dump-again", { path: outputPath }),
+			/Ask the user to confirm overwriting it.*overwrite: true/,
+		);
+		const second = await markdownTool.execute("dump-confirmed", { path: outputPath, overwrite: true });
+		assert.equal(second.content[0].text, outputPath);
+		assert.equal(await readFile(outputPath, "utf8"), expectedMarkdown);
+		assert.equal(first.details?.action, "to_md");
+		assert.equal(first.details?.path, outputPath);
+		assert.deepEqual((first.details?.tasks as Array<{ id: string }>).map((task) => task.id), ["parent", "child"]);
+		assert.deepEqual(first.details?.counts, {
+			total: 2,
+			pending: 1,
+			in_progress: 0,
+			completed: 1,
+			failed: 0,
+			stopped: 0,
+		});
+
+		const theme = { fg: (_color: string, text: string) => text };
+		const rendered = markdownTool.renderResult?.(first, {}, theme)?.render(200).map((line) => stripVTControlCharacters(line).trimEnd());
+		assert.deepEqual(rendered, [`Exported 2 projected task(s) to ${outputPath}`]);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
 });
 
 test("cycles sidebar → browse → off and supports named view commands", async () => {

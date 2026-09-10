@@ -55,11 +55,12 @@ Parents are independently executable. Their status and progress are not derived 
 
 ## Presentation tools
 
-| Tool | UI-only behavior |
+| Tool | Behavior |
 |---|---|
 | `task_ui_create` | Add or mirror one numbered root task or subtask, optionally with a label |
 | `task_ui_batch_create` | Atomically add or mirror several tasks, including nested hierarchies |
 | `task_ui_list` | List projected tasks by one required workflow scope or exact status |
+| `task_ui_to_md` | Write the complete projection to a Markdown file |
 | `task_ui_get` | Read one task; without `task_id`, return active, next, and focused tasks |
 | `task_ui_update` | Update the label, status, blockers, focus-driving state, progress, and execution telemetry |
 | `task_ui_output` | Append, read, or clear projected output |
@@ -89,6 +90,32 @@ task_ui_list({ status: "failed" });
 ```
 
 Providing both selectors or neither selector is invalid.
+
+### Exporting Markdown
+
+Call `task_ui_to_md` without parameters to write the complete projection to a unique file in the system temporary directory:
+
+```ts
+task_ui_to_md({});
+```
+
+Pass `path` to select a location. Relative paths resolve from Pi's current working directory.
+
+```ts
+task_ui_to_md({ path: "task-handoff.md" });
+```
+
+The extension creates the Markdown. The file contains numbered task headings, descriptions, statuses, and local links to dependencies.
+
+The heading level shows the task hierarchy. The tool includes all task statuses in stable hierarchy and number order.
+
+The tool returns the absolute file path. Parent directories must already exist.
+
+The tool will not replace an existing file by default. After the user confirms replacement, call it again with `overwrite: true`:
+
+```ts
+task_ui_to_md({ path: "task-handoff.md", overwrite: true });
+```
 
 ### Agent-oriented results
 
