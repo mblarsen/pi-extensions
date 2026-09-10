@@ -1,13 +1,47 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { createInitialTaskUiState, createTasks } from "./core.ts";
-import { renderTaskUiMarkdown } from "./markdown.ts";
+import { renderTaskUiMarkdown, writeTaskUiMarkdown } from "./markdown.ts";
 
 const NOW = "2026-09-10T10:00:00.000Z";
 
 describe("task-ui Markdown renderer", () => {
 	test("renders an empty projection", () => {
 		assert.equal(renderTaskUiMarkdown(createInitialTaskUiState()), "_No projected tasks._");
+	});
+
+	test("writes to a unique file in the system temporary directory by default", async () => {
+		const outputPath = await writeTaskUiMarkdown(createInitialTaskUiState());
+		try {
+			assert.equal(dirname(outputPath), tmpdir());
+			assert.equal(await readFile(outputPath, "utf8"), "_No projected tasks._");
+		} finally {
+			await rm(outputPath, { force: true });
+		}
+	});
+
+	test("requires confirmation before overwriting an existing file", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "task-ui-markdown-"));
+		const outputPath = join(directory, "tasks.md");
+		await writeFile(outputPath, "keep this", "utf8");
+		try {
+			await assert.rejects(
+				writeTaskUiMarkdown(createInitialTaskUiState(), { path: outputPath }),
+				new RegExp(`Markdown file already exists: ${outputPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\. Ask the user to confirm overwriting it`),
+			);
+			assert.equal(await readFile(outputPath, "utf8"), "keep this");
+
+			assert.equal(
+				await writeTaskUiMarkdown(createInitialTaskUiState(), { path: outputPath, overwrite: true }),
+				outputPath,
+			);
+			assert.equal(await readFile(outputPath, "utf8"), "_No projected tasks._");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	test("renders hierarchy, descriptions, statuses, and multiple dependencies", () => {

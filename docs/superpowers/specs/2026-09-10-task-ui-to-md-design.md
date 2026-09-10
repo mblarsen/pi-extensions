@@ -12,29 +12,35 @@ The tool will include every projected task and its current status. It will inclu
 
 The tool will exclude labels, focus, progress, owners, timestamps, task output, and execution telemetry.
 
-The tool will not write a file. It will return Markdown so the caller can display, copy, or save it.
+The tool will write the Markdown to disk. It will return the absolute file path.
 
 ## Tool Contract
 
 The tool will have this interface:
 
 ```ts
-task_ui_to_md({})
+task_ui_to_md({
+  path?: string,
+  overwrite?: boolean,
+})
 ```
 
-The tool will accept no parameters. It will not modify or persist task-ui state.
+Without `path`, the tool will create a unique `.md` file in the system temporary directory. A relative path will resolve from Pi's current working directory.
 
-The text content of a successful result will contain only the generated Markdown. It will not add confirmation text, summaries, or suggested actions.
+The tool will not create parent directories. It will not modify or persist task-ui state.
+
+The text content of a successful result will contain only the absolute output path. It will not add confirmation text, summaries, or suggested actions.
 
 The structured result details will contain:
 
 - `action: "to_md"`
+- the absolute output path
 - the ordered task records
 - status counts for the complete projection
 
-The custom TUI result will show `N projected task(s) exported`. It will not print the complete Markdown document in the tool result view.
+The custom TUI result will show `Exported N projected task(s) to <path>`. It will not print the complete Markdown document in the tool result view.
 
-For an empty projection, the tool will return:
+For an empty projection, the generated file will contain:
 
 ```md
 _No projected tasks._
@@ -120,30 +126,45 @@ The renderer will prepare all headings and anchors before it renders dependency 
 
 The Markdown renderer and the TUI will use one task-ordering helper. The helper will preserve the current root and subtask ordering behavior.
 
+### Markdown file writer
+
+The file writer will resolve the output path and call the pure renderer. It will use exclusive creation unless `overwrite` is `true`.
+
+The default output name will include a random UUID. This makes collisions in the system temporary directory unlikely.
+
 ### Tool registration
 
-The extension will register `task_ui_to_md` as a sequential, read-only tool. The tool will read the current in-memory state and call the pure renderer.
+The extension will register `task_ui_to_md` as a sequential tool. The tool will read the current in-memory state and call the file writer.
 
 ## Data Flow
 
-1. The caller invokes `task_ui_to_md({})`.
+1. The caller invokes `task_ui_to_md` with optional `path` and `overwrite` values.
 2. The tool reads the current in-memory task-ui state.
 3. The renderer orders all tasks.
 4. The renderer calculates each heading, display number, and local anchor.
 5. The renderer generates each task section and its dependency links.
-6. The tool returns the Markdown and structured details.
+6. The file writer writes the Markdown to the resolved path.
+7. The tool returns the absolute path and structured details.
 
 No step changes task-ui state.
 
 ## Error Handling
 
-An empty projection will return the documented empty-state Markdown.
+An empty projection will create a file with the documented empty-state Markdown.
 
 A missing dependency will render as an inline task ID. It will not make the tool fail.
 
 An orphaned task will render as a root task, which matches the current display ordering behavior.
 
-The renderer will not mutate task records or arrays. Unexpected internal errors will use Pi's normal tool error handling.
+If the target exists and `overwrite` is not `true`, the tool will fail with this message:
+
+```text
+Markdown file already exists: <path>. Ask the user to confirm overwriting it, then call task_ui_to_md({ path: "<path>", overwrite: true }).
+```
+
+The agent must get user confirmation before it sets `overwrite: true`.
+
+The tool will pass other file-system errors to Pi's normal tool error handling. The renderer will not mutate task records or arrays.
 
 ## Tests
 
@@ -163,19 +184,30 @@ Unit tests for the renderer will cover:
 - heading anchor escaping and collisions
 - input state immutability
 
+File-writer tests will cover:
+
+- a unique default path in the system temporary directory
+- a supplied output path
+- exclusive creation by default
+- the confirmation error for an existing file
+- replacement after `overwrite: true`
+
 Extension tests will verify:
 
 - registration under the `task_ui_to_md` name
-- an empty parameter schema
-- exact Markdown text content
-- ordered task records and status counts in structured details
+- optional `path` and `overwrite` parameters
+- the absolute file path in text content
+- exact Markdown file content
+- the output path, ordered task records, and status counts in structured details
 - a compact TUI result
-- no state mutation or persistence
+- no task-ui state mutation or persistence
 
 ## Documentation and Release
 
-The README will list `task_ui_to_md` with the other presentation tools. It will explain that the extension creates the Markdown and does not write a file.
+The README will list `task_ui_to_md` with the other presentation tools. It will explain default paths, supplied paths, and replacement confirmation.
 
-The bundled Agent Skill will explain when to use the tool and that its text result is ready to save without reformatting.
+The bundled Agent Skill will explain when to use the tool. It will require confirmation before replacement.
+
+The skill will also recommend short plain-text task descriptions. A description will record the outcome and only the context needed to resume work.
 
 This feature adds a new public tool. The change will include a minor Changeset for `@mblarsen/pi-task-ui`.

@@ -37,7 +37,7 @@ import {
 	type TaskStatus,
 	type TaskUiState,
 } from "./core.ts";
-import { renderTaskUiMarkdown } from "./markdown.ts";
+import { writeTaskUiMarkdown } from "./markdown.ts";
 
 export { orderTasksForDisplay } from "./core.ts";
 
@@ -77,6 +77,7 @@ type TaskToolDetails = {
 	detachedChildren?: string[];
 	removedCount?: number;
 	reason?: string;
+	path?: string;
 };
 
 type SnapshotEvent = { tasks: ExternalTaskInput[]; focusedTaskId?: string };
@@ -582,7 +583,7 @@ function renderToolResult(result: { content: Array<{ type: string; text?: string
 		return new Text(theme.fg("muted", `${details.dashboard.active.length} active · next ${details.dashboard.next ? `#${details.dashboard.next.number}` : "none"}`), 0, 0);
 	}
 	if (details?.action === "to_md") {
-		return new Text(theme.fg("muted", `${details.tasks?.length ?? 0} projected task(s) exported`), 0, 0);
+		return new Text(theme.fg("muted", `Exported ${details.tasks?.length ?? 0} projected task(s) to ${details.path}`), 0, 0);
 	}
 	if (details?.tasks) return new Text(theme.fg("muted", `${details.tasks.length} projected task(s)`), 0, 0);
 	const first = result.content[0];
@@ -871,15 +872,19 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "task_ui_to_md",
 		label: "Task UI to Markdown",
-		description: "Render the complete task-ui projection as Markdown. This does not modify state.",
-		promptSnippet: "Render the complete task-ui projection as Markdown",
+		description: "Write the complete task-ui projection to a Markdown file. This does not modify state.",
+		promptSnippet: "Write the complete task-ui projection to a Markdown file",
 		executionMode: "sequential",
-		parameters: Type.Object({}, { additionalProperties: false }),
-		async execute() {
+		parameters: Type.Object({
+			path: Type.Optional(Type.String({ description: "Output path; defaults to a unique file in the system temporary directory" })),
+			overwrite: Type.Optional(Type.Boolean({ description: "Replace an existing file after the user confirms" })),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
 			const tasks = orderTasksForDisplay(listTasks(state, { scope: "all" }));
+			const path = await writeTaskUiMarkdown(state, { path: params.path, overwrite: params.overwrite });
 			return {
-				content: [{ type: "text", text: renderTaskUiMarkdown(state) }],
-				details: { action: "to_md", tasks, counts: taskCounts(state.tasks) } as TaskToolDetails,
+				content: [{ type: "text", text: path }],
+				details: { action: "to_md", path, tasks, counts: taskCounts(state.tasks) } as TaskToolDetails,
 			};
 		},
 		renderCall: (_args, theme) => renderToolCall("task_ui_to_md", undefined, theme),
