@@ -408,7 +408,7 @@ function dimmedBoxRow(text: string, width: number, theme: Theme): string {
 }
 
 function dimmedBoxDivider(width: number, theme: Theme): string {
-	return theme.fg("dim", `├${"─".repeat(Math.max(0, width - 2))}┤`);
+	return dimmedBoxRow("─".repeat(Math.max(0, width - 4)), width, theme);
 }
 
 export class TaskBarComponent {
@@ -473,7 +473,7 @@ export class TaskBarComponent {
 			.filter((task) => task.status === "in_progress" && task.executing && task.description?.trim())
 			.slice(0, MAX_SIDEBAR_DESCRIPTION_TASKS)
 			.map((task) => wrapDescription(task.description!, Math.max(1, width - 4)));
-		let remainingRows = Math.floor(this.getViewportHeight()) - lines.length - 1;
+		const remainingRows = Math.floor(this.getViewportHeight()) - lines.length;
 		if (!descriptions.length || remainingRows < 3) {
 			return lines.map((line) => truncateToWidth(line, width, ""));
 		}
@@ -495,7 +495,6 @@ export class TaskBarComponent {
 		if (!descriptionLines.length) return lines.map((line) => truncateToWidth(line, width, ""));
 
 		lines.push(
-			"",
 			this.theme.fg("dim", `╭${"─".repeat(Math.max(0, width - 2))}╮`),
 			...descriptionLines,
 			this.theme.fg("dim", `╰${"─".repeat(Math.max(0, width - 2))}╯`),

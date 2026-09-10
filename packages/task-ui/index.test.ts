@@ -391,18 +391,21 @@ test("sidebar shows descriptions for executing tasks in depth-first order", () =
 	const lines = new TaskBarComponent(() => state, () => "✳", theme as never, () => 40)
 		.render(60)
 		.map(stripVTControlCharacters);
-	const separator = lines.indexOf("");
-	const descriptions = lines.slice(separator + 1);
+	const mainBottom = lines.findIndex((line) => line.startsWith("╰"));
+	const descriptions = lines.slice(mainBottom + 1);
 
-	assert.ok(separator > 0);
+	assert.ok(mainBottom > 0);
+	assert.equal(descriptions[0], `╭${"─".repeat(58)}╮`);
 	assert.ok(descriptions.some((line) => line.includes("Parent context")));
 	assert.ok(descriptions.some((line) => line.includes("Child context")));
 	assert.ok(descriptions.some((line) => line.includes("Grandchild context")));
 	assert.equal(descriptions.some((line) => line.includes("Fourth context")), false);
 	assert.equal(descriptions.some((line) => line.includes("Paused context")), false);
 	assert.equal(descriptions.some((line) => /Parent|Child|Grandchild/.test(line) && !line.includes("context")), false);
-	assert.equal(descriptions.filter((line) => line.startsWith("├")).length, 2);
-	assert.equal(descriptions[0], `╭${"─".repeat(58)}╮`);
+	assert.deepEqual(
+		descriptions.filter((line) => line.includes("─") && line.startsWith("│")),
+		Array(2).fill(`│ ${"─".repeat(56)} │`),
+	);
 	assert.ok(styled.some(([color, text]) => color === "dim" && text === "Parent context"));
 });
 
@@ -421,13 +424,14 @@ test("sidebar crops descriptions to three lines and respects its height budget",
 	const roomy = new TaskBarComponent(() => state, () => "✳", theme as never, () => 20)
 		.render(30)
 		.map(stripVTControlCharacters);
-	const roomyDetails = roomy.slice(roomy.indexOf("") + 2, -1);
+	const roomyMainBottom = roomy.findIndex((line) => line.startsWith("╰"));
+	const roomyDetails = roomy.slice(roomyMainBottom + 2, -1);
 	assert.equal(roomyDetails.length, 3);
 	assert.match(roomyDetails[0], /First explicit line/);
 	assert.match(roomyDetails[1], /Second explicit line/);
 	assert.match(roomyDetails[2], /Third explicit line…/);
 
-	const constrained = new TaskBarComponent(() => state, () => "✳", theme as never, () => 7)
+	const constrained = new TaskBarComponent(() => state, () => "✳", theme as never, () => 6)
 		.render(30)
 		.map(stripVTControlCharacters);
 	assert.equal(constrained.includes(""), false);
