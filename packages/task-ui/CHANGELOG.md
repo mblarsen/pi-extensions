@@ -1,5 +1,11 @@
 # @mblarsen/pi-task-ui
 
+## 2.2.2
+
+### Patch Changes
+
+- 3b66be6: Show sidebar descriptions only for executing tasks visible in the task list.
+
 ## 2.2.1
 
 ### Patch Changes
