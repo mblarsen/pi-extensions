@@ -370,6 +370,70 @@ test("renders no window when there are no tasks or history", () => {
 	assert.deepEqual(new TaskBarComponent(() => state, () => "✳", theme as never).render(60), []);
 });
 
+test("sidebar shows descriptions for executing tasks in depth-first order", () => {
+	const state = createTasks(createInitialTaskUiState(), [
+		{ id: "parent", subject: "Parent", description: "Parent context", executing: true },
+		{ id: "other", subject: "Other", description: "Fourth context", executing: true },
+		{ id: "child", subject: "Child", description: "Child context", parentId: "parent", executing: true },
+		{ id: "grandchild", subject: "Grandchild", description: "Grandchild context", parentId: "child", executing: true },
+		{ id: "paused", subject: "Paused", description: "Paused context", status: "in_progress" },
+		{ id: "missing", subject: "Missing", executing: true },
+	]).state;
+	const styled: Array<[string, string]> = [];
+	const theme = {
+		fg: (color: string, text: string) => {
+			styled.push([color, text]);
+			return text;
+		},
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const lines = new TaskBarComponent(() => state, () => "✳", theme as never, () => 40)
+		.render(60)
+		.map(stripVTControlCharacters);
+	const separator = lines.indexOf("");
+	const descriptions = lines.slice(separator + 1);
+
+	assert.ok(separator > 0);
+	assert.ok(descriptions.some((line) => line.includes("Parent context")));
+	assert.ok(descriptions.some((line) => line.includes("Child context")));
+	assert.ok(descriptions.some((line) => line.includes("Grandchild context")));
+	assert.equal(descriptions.some((line) => line.includes("Fourth context")), false);
+	assert.equal(descriptions.some((line) => line.includes("Paused context")), false);
+	assert.equal(descriptions.some((line) => /Parent|Child|Grandchild/.test(line) && !line.includes("context")), false);
+	assert.equal(descriptions.filter((line) => line.startsWith("├")).length, 2);
+	assert.equal(descriptions[0], `╭${"─".repeat(58)}╮`);
+	assert.ok(styled.some(([color, text]) => color === "dim" && text === "Parent context"));
+});
+
+test("sidebar crops descriptions to three lines and respects its height budget", () => {
+	const state = createTasks(createInitialTaskUiState(), [{
+		id: "work",
+		subject: "Work",
+		description: "First explicit line\nSecond explicit line\nThird explicit line\nFourth explicit line",
+		executing: true,
+	}]).state;
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const roomy = new TaskBarComponent(() => state, () => "✳", theme as never, () => 20)
+		.render(30)
+		.map(stripVTControlCharacters);
+	const roomyDetails = roomy.slice(roomy.indexOf("") + 2, -1);
+	assert.equal(roomyDetails.length, 3);
+	assert.match(roomyDetails[0], /First explicit line/);
+	assert.match(roomyDetails[1], /Second explicit line/);
+	assert.match(roomyDetails[2], /Third explicit line…/);
+
+	const constrained = new TaskBarComponent(() => state, () => "✳", theme as never, () => 7)
+		.render(30)
+		.map(stripVTControlCharacters);
+	assert.equal(constrained.includes(""), false);
+	assert.equal(constrained.some((line) => line.includes("First explicit line")), false);
+});
+
 test("browser shows every task in hierarchical number order", () => {
 	const state = createTasks(createInitialTaskUiState(), [
 		{ id: "parent", subject: "Completed parent", status: "completed" },
@@ -398,6 +462,138 @@ test("browser shows every task in hierarchical number order", () => {
 	assert.ok(lines.findIndex((line) => line.includes("#1 Completed parent")) < lines.findIndex((line) => line.includes("#1.1 Pending child")));
 	assert.ok(lines.findIndex((line) => line.includes("#1.1 Pending child")) < lines.findIndex((line) => line.includes("#2 Active root")));
 	assert.match(lines.find((line) => line.includes("Pending child")) ?? "", /›/);
+});
+
+test("browser toggles a details pane for the selected task", () => {
+	const state = createTasks(createInitialTaskUiState(), [
+		{ id: "task", subject: "Task" },
+	]).state;
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const keybindings = { matches: (data: string, binding: string) => binding === "tui.select.cancel" && data === "escape" };
+	let closes = 0;
+	const browser = new TaskBrowserComponent(
+		() => state,
+		() => "✳",
+		() => 10,
+		theme as never,
+		keybindings as never,
+		() => {},
+		() => { closes += 1; },
+	);
+
+	assert.equal(browser.render(50).some((line) => line.includes("No description")), false);
+	browser.handleInput("d");
+	const open = browser.render(50).map(stripVTControlCharacters);
+	assert.ok(open.some((line) => line.includes("No description")));
+	assert.ok(open.some((line) => line.includes("d/Esc close")));
+	assert.ok(open.some((line) => line.includes("#1 Task")));
+	assert.ok(open.length <= 10);
+
+	browser.handleInput("escape");
+	assert.equal(browser.render(50).some((line) => line.includes("No description")), false);
+	assert.equal(closes, 0);
+	browser.handleInput("q");
+	assert.equal(closes, 1);
+});
+
+test("browser scrolls complete descriptions without hiding the selected task", () => {
+	const description = Array.from({ length: 12 }, (_, index) => `Detail line ${index + 1}`).join("\n");
+	const state = createTasks(
+		createInitialTaskUiState(),
+		Array.from({ length: 12 }, (_, index) => ({
+			id: `task-${index + 1}`,
+			subject: `Task ${index + 1}`,
+			description: index === 9 ? description : undefined,
+		})),
+	).state;
+	state.focusedTaskId = "task-10";
+	const bindingKeys: Record<string, string[]> = {
+		"tui.select.cancel": ["escape"],
+		"tui.select.up": ["up"],
+		"tui.select.down": ["down"],
+	};
+	const keybindings = { matches: (data: string, binding: string) => bindingKeys[binding]?.includes(data) ?? false };
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	let viewportHeight = 10;
+	const browser = new TaskBrowserComponent(
+		() => state,
+		() => "✳",
+		() => viewportHeight,
+		theme as never,
+		keybindings as never,
+		() => {},
+		() => {},
+	);
+
+	browser.handleInput("d");
+	let lines = browser.render(50).map(stripVTControlCharacters);
+	assert.ok(lines.some((line) => line.includes("#10 Task 10")));
+	assert.ok(lines.some((line) => line.includes("details · 1–4/12")));
+	assert.ok(lines.some((line) => line.includes("Detail line 4")));
+	assert.equal(lines.some((line) => line.includes("Detail line 5")), false);
+
+	browser.handleInput("j");
+	browser.handleInput("\x04");
+	lines = browser.render(50).map(stripVTControlCharacters);
+	assert.ok(lines.some((line) => line.includes("details · 4–7/12")));
+	assert.equal(browser.getSelectedTaskId(), "task-10");
+
+	for (let index = 0; index < 20; index += 1) browser.handleInput("down");
+	lines = browser.render(50).map(stripVTControlCharacters);
+	assert.ok(lines.some((line) => line.includes("details · 9–12/12")));
+	viewportHeight = 7;
+	lines = browser.render(50).map(stripVTControlCharacters);
+	assert.ok(lines.some((line) => line.includes("#10 Task 10")));
+	assert.ok(lines.some((line) => line.includes("details · 9–10/12")));
+
+	browser.handleInput("d");
+	browser.handleInput("j");
+	assert.equal(browser.getSelectedTaskId(), "task-11");
+});
+
+test("browser resets details when the selected task disappears", () => {
+	let state = createTasks(createInitialTaskUiState(), [
+		{ id: "first", subject: "First", description: "First context" },
+		{ id: "second", subject: "Second", description: "Old line one\nOld line two\nOld line three" },
+	]).state;
+	state.focusedTaskId = "second";
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const keybindings = { matches: () => false };
+	const targets: string[] = [];
+	const browser = new TaskBrowserComponent(
+		() => state,
+		() => "✳",
+		() => 8,
+		theme as never,
+		keybindings as never,
+		() => {},
+		(target) => { targets.push(target); },
+	);
+
+	browser.handleInput("d");
+	browser.render(40);
+	browser.handleInput("j");
+	state = { ...state, tasks: state.tasks.filter((task) => task.id !== "second") };
+	const lines = browser.render(40).map(stripVTControlCharacters);
+	assert.equal(browser.getSelectedTaskId(), "first");
+	assert.ok(lines.some((line) => line.includes("First context")));
+	assert.ok(lines.some((line) => line.includes("details · 1–1/1")));
+	assert.equal(lines.some((line) => line.includes("Old line")), false);
+
+	browser.handleInput("\x1bu");
+	assert.deepEqual(targets, ["off"]);
 });
 
 test("browser navigates and scrolls through the complete task list", () => {
