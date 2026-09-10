@@ -1,5 +1,11 @@
 # @mblarsen/pi-task-ui
 
+## 2.1.0
+
+### Minor Changes
+
+- 9e1570c: Add `task_ui_to_md` to write the complete task projection to a Markdown file.
+
 ## 2.0.0
 
 ### Major Changes
