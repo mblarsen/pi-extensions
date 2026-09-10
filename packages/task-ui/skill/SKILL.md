@@ -126,15 +126,71 @@ Call `task_ui_get` without `task_id` to retrieve:
 - the next unblocked pending task
 - the focused task
 
-Call it with `task_id` for full details about one task. Use `task_ui_list` for full or status-filtered projection reads.
+Call it with `task_id` for full details about one task.
+
+`task_ui_list` requires exactly one of `scope` or `status`. Never omit both, and never provide both.
+
+Prefer `scope` for normal workflow questions:
+
+| Scope | Use it to retrieve |
+|---|---|
+| `all` | Every projected task, such as during resynchronization |
+| `open` | All unfinished tasks: `pending` and `in_progress` |
+| `ready` | Only unblocked `pending` tasks that can start now |
+| `active` | Only `in_progress` tasks |
+| `history` | Terminal tasks: `completed`, `failed`, and `stopped` |
+
+Use `status` instead when you need exactly one stored state without retrieving every task in a broader scope. Valid exact statuses are `pending`, `in_progress`, `completed`, `failed`, and `stopped`. A `pending` query includes blocked tasks; use `scope: "ready"` when blocked tasks must be excluded.
+
+Examples:
+
+```ts
+task_ui_list({ scope: "ready" })       // Find work that can start now.
+task_ui_list({ scope: "open" })        // Review all unfinished work.
+task_ui_list({ scope: "all" })         // Reconcile the complete projection.
+task_ui_list({ status: "failed" })     // Inspect failures only.
+task_ui_list({ status: "pending" })    // Include blocked and unblocked pending work.
+```
+
+Do not call `task_ui_list({ scope: "all" })` and filter the returned tasks yourself when an exact `status` query can return only the required state.
 
 Use `task_ui_output` only for concise, user-relevant projected output. Do not stream large logs into the sidebar.
+
+## Follow tool-result guidance
+
+Tool results can contain two separate agent-oriented fields:
+
+- `suggestedNextTask` identifies the next unblocked pending task when that information is useful. A value of `null` means that no task is ready; an omitted field means the result does not make a next-task recommendation.
+- `suggestedAction` is text showing a sensible later `task_ui_*` call with valid call syntax. It describes API usage; it does not select or start backend work.
+
+The structured `details` additions are:
+
+| Tool result | Additional fields |
+|---|---|
+| `create` | `suggestedNextTask`, `suggestedAction` |
+| `batch_create` | `createdIds`, `suggestedNextTask`, `suggestedAction` |
+| `list` | `selector`, full-projection `counts`, `suggestedNextTask`, `suggestedAction` |
+| `get` | `blockers`, `isBlocked`, `suggestedAction` |
+| `get_dashboard` | `suggestedAction`; the dashboard already contains `next` |
+| `update` | `changedFields`, `newlyReady`, `suggestedAction`; terminal transitions also include `suggestedNextTask` |
+| `output:*` | `outputCount`; appends also include `suggestedAction` |
+| `remove` | `detachedChildren`, `suggestedNextTask`, `suggestedAction` |
+| `clear` | `removedCount`, `suggestedNextTask: null`, `suggestedAction` |
+| `stop` | `reason`, `suggestedNextTask`, `suggestedAction` |
+
+For example, starting a projected task can return:
+
+```text
+Later call task_ui_update({ task_id: "worker-1", status: "completed", executing: false, progress: 100 }) when the work is complete.
+```
+
+Treat both fields as advisory projection guidance. Keep the real backend authoritative, and do not perform a suggested mutation until the corresponding backend state is confirmed.
 
 ### New-session resynchronization
 
 When a new Pi session resumes work managed by `ctx_task` or another persistent task backend:
 
-1. Call `task_ui_list` to inspect the current projection; resumed Pi sessions may already contain UI state.
+1. Call `task_ui_list({ scope: "all" })` to inspect the current projection; resumed Pi sessions may already contain UI state.
 2. Query the backend with its `list` operation.
 3. Treat backend IDs and states as authoritative.
 4. Create missing projected tasks with `task_ui_create` or `task_ui_batch_create`.

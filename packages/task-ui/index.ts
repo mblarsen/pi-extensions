@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
+	TASK_LIST_SCOPES,
 	TASK_STATUSES,
 	appendTaskOutput,
 	clearTaskOutput,
@@ -20,6 +21,7 @@ import {
 	getTaskDashboard,
 	getTaskDepth,
 	getTaskDisplayNumber,
+	listTasks,
 	normalizeStoredTaskUiState,
 	removeTask,
 	replaceExternalTasks,
@@ -29,7 +31,9 @@ import {
 	type CreateTaskInput,
 	type ExternalTaskInput,
 	type TaskDashboard,
+	type TaskListSelector,
 	type TaskRecord,
+	type TaskStatus,
 	type TaskUiState,
 } from "./core.ts";
 
@@ -49,11 +53,26 @@ export const TASK_UI_EVENTS = {
 	focus: "task-ui:focus",
 } as const;
 
+type TaskCounts = Record<TaskStatus, number> & { total: number };
+
 type TaskToolDetails = {
 	action: string;
 	task?: TaskRecord;
 	tasks?: TaskRecord[];
 	dashboard?: TaskDashboard;
+	selector?: TaskListSelector;
+	counts?: TaskCounts;
+	suggestedNextTask?: TaskRecord | null;
+	suggestedAction?: string;
+	createdIds?: string[];
+	changedFields?: string[];
+	newlyReady?: TaskRecord[];
+	blockers?: string[];
+	isBlocked?: boolean;
+	outputCount?: number;
+	detachedChildren?: string[];
+	removedCount?: number;
+	reason?: string;
 };
 
 type SnapshotEvent = { tasks: ExternalTaskInput[]; focusedTaskId?: string };
@@ -122,6 +141,34 @@ function toCreateTaskInput(input: AgentTaskInput): CreateTaskInput {
 	};
 }
 
+function taskListSelector(params: {
+	scope?: (typeof TASK_LIST_SCOPES)[number];
+	status?: TaskStatus;
+}): TaskListSelector {
+	const hasScope = params.scope !== undefined;
+	const hasStatus = params.status !== undefined;
+	if (hasScope === hasStatus) throw new Error("task_ui_list requires exactly one of scope or status");
+	return hasScope ? { scope: params.scope! } : { status: params.status! };
+}
+
+function suggestedActionForList(selector: TaskListSelector, hasResults: boolean, projectionHasTasks: boolean): string {
+	if (!hasResults) {
+		return projectionHasTasks
+			? 'Call task_ui_list({ scope: "all" }) to inspect tasks outside this selection.'
+			: 'Call task_ui_create({ subject: "Describe the task" }) to project new work when needed.';
+	}
+	if ("scope" in selector && selector.scope === "ready") {
+		return 'Call task_ui_update({ task_id: "<returned task id>", status: "in_progress", executing: true, active_form: "Describe current work…" }) when starting a returned task.';
+	}
+	if ("status" in selector && selector.status === "pending") {
+		return 'Call task_ui_list({ scope: "ready" }) to exclude blocked pending tasks before starting work.';
+	}
+	if (("scope" in selector && selector.scope === "active") || ("status" in selector && selector.status === "in_progress")) {
+		return 'Later call task_ui_update({ task_id: "<returned task id>", status: "completed", executing: false, progress: 100 }) when returned work is complete.';
+	}
+	return 'Call task_ui_get({ task_id: "<returned task id>" }) to inspect one returned task.';
+}
+
 function createTaskSchema() {
 	return Type.Object({
 		id: Type.Optional(Type.String({ description: "Backend task ID to mirror; generated when omitted" })),
@@ -145,6 +192,44 @@ function taskSummary(task: TaskRecord): string {
 	const execution = task.executing ? ", executing" : "";
 	const label = task.label ? ` [${task.label}]` : "";
 	return `#${task.number} [${task.status}${execution}] ${task.id} — ${task.subject}${label}`;
+}
+
+function taskCounts(tasks: TaskRecord[]): TaskCounts {
+	const counts: TaskCounts = { total: tasks.length, pending: 0, in_progress: 0, completed: 0, failed: 0, stopped: 0 };
+	for (const task of tasks) counts[task.status] += 1;
+	return counts;
+}
+
+function unresolvedBlockers(task: TaskRecord, tasks: TaskRecord[]): string[] {
+	const statusById = new Map(tasks.map((item) => [item.id, item.status]));
+	return task.blockedBy.filter((id) => statusById.get(id) !== "completed");
+}
+
+function suggestedActionForTask(task: TaskRecord, tasks: TaskRecord[]): string {
+	const taskId = JSON.stringify(task.id);
+	if (task.status === "pending") {
+		const blockers = unresolvedBlockers(task, tasks);
+		if (blockers.length) {
+			const knownBlocker = blockers.find((id) => tasks.some((candidate) => candidate.id === id));
+			return knownBlocker
+				? `Call task_ui_get({ task_id: ${JSON.stringify(knownBlocker)} }) to inspect the blocking task.`
+				: 'Call task_ui_list({ scope: "all" }) to reconcile the missing blocking task.';
+		}
+		return `Call task_ui_update({ task_id: ${taskId}, status: "in_progress", executing: true, active_form: "Describe current work…" }) when work starts.`;
+	}
+	if (task.status === "in_progress") {
+		return `Later call task_ui_update({ task_id: ${taskId}, status: "completed", executing: false, progress: 100 }) when the work is complete.`;
+	}
+	return 'Call task_ui_list({ scope: "ready" }) to find work that can start.';
+}
+
+function resultText(message: string, suggestedNextTask: TaskRecord | null | undefined, suggestedAction?: string): string {
+	const lines = [message];
+	if (suggestedNextTask !== undefined) {
+		lines.push(`Suggested next ready task: ${suggestedNextTask ? taskSummary(suggestedNextTask) : "none"}`);
+	}
+	if (suggestedAction) lines.push(`Suggested action: ${suggestedAction}`);
+	return lines.join("\n");
 }
 
 function taskDetails(task: TaskRecord): string {
@@ -736,8 +821,13 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		parameters: createTaskSchema(),
 		async execute(_id, params) {
 			const result = createTask(state, toCreateTaskInput(params));
+			const suggestedNextTask = getTaskDashboard(result.state).next ?? null;
+			const suggestedAction = suggestedActionForTask(result.task, result.state.tasks);
 			persistMutation(result.state);
-			return { content: [{ type: "text", text: `Projected ${taskSummary(result.task)}. No backend work was started.` }], details: { action: "create", task: result.task } as TaskToolDetails };
+			return {
+				content: [{ type: "text", text: resultText(`Projected ${taskSummary(result.task)}. No backend work was started.`, suggestedNextTask, suggestedAction) }],
+				details: { action: "create", task: result.task, suggestedNextTask, suggestedAction } as TaskToolDetails,
+			};
 		},
 		renderCall: (args, theme) => renderToolCall("task_ui_create", args.subject, theme),
 		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
@@ -752,8 +842,19 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		parameters: Type.Object({ tasks: Type.Array(createTaskSchema(), { minItems: 1, maxItems: 100 }) }),
 		async execute(_id, params) {
 			const result = createTasks(state, params.tasks.map(toCreateTaskInput));
+			const suggestedNextTask = getTaskDashboard(result.state).next ?? null;
+			const suggestedAction = 'Call task_ui_list({ scope: "ready" }) to find work that can start.';
 			persistMutation(result.state);
-			return { content: [{ type: "text", text: `Projected ${result.tasks.length} tasks atomically. No backend work was started.` }], details: { action: "batch_create", tasks: result.tasks } as TaskToolDetails };
+			return {
+				content: [{ type: "text", text: resultText(`Projected ${result.tasks.length} tasks atomically. No backend work was started.`, suggestedNextTask, suggestedAction) }],
+				details: {
+					action: "batch_create",
+					tasks: result.tasks,
+					createdIds: result.tasks.map((task) => task.id),
+					suggestedNextTask,
+					suggestedAction,
+				} as TaskToolDetails,
+			};
 		},
 		renderCall: (args, theme) => renderToolCall("task_ui_batch_create", `${args.tasks.length} tasks`, theme),
 		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
@@ -762,15 +863,30 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "task_ui_list",
 		label: "Task UI List",
-		description: "List tasks currently shown by task-ui. This reads only the UI projection.",
-		promptSnippet: "List task-ui's current presentation projection",
+		description: "List tasks in the UI projection. Provide exactly one selector: scope for workflow-oriented groups, or status for one exact stored state.",
+		promptSnippet: "List task-ui by required workflow scope or exact status",
 		executionMode: "sequential",
-		parameters: Type.Object({ status: Type.Optional(StringEnum(TASK_STATUSES)) }),
+		parameters: Type.Object({
+			scope: Type.Optional(StringEnum(TASK_LIST_SCOPES, { description: "Recommended workflow view: all, open, ready, active, or history" })),
+			status: Type.Optional(StringEnum(TASK_STATUSES, { description: "One exact stored task state; use instead of scope when only that state is needed" })),
+		}, {
+			description: "Provide exactly one of scope or status. Both and neither are invalid.",
+			additionalProperties: false,
+			minProperties: 1,
+			maxProperties: 1,
+		}),
 		async execute(_id, params) {
-			const tasks = state.tasks.filter((task) => !params.status || task.status === params.status).map((task) => ({ ...task, blockedBy: [...task.blockedBy], output: [...task.output] }));
-			return { content: [{ type: "text", text: tasks.length ? tasks.map(taskSummary).join("\n") : "No projected tasks" }], details: { action: "list", tasks } as TaskToolDetails };
+			const selector = taskListSelector(params);
+			const tasks = listTasks(state, selector);
+			const suggestedNextTask = getTaskDashboard(state).next ?? null;
+			const suggestedAction = suggestedActionForList(selector, tasks.length > 0, state.tasks.length > 0);
+			const text = tasks.length ? tasks.map(taskSummary).join("\n") : "No projected tasks matched the selector";
+			return {
+				content: [{ type: "text", text: resultText(text, suggestedNextTask, suggestedAction) }],
+				details: { action: "list", tasks, selector, counts: taskCounts(state.tasks), suggestedNextTask, suggestedAction } as TaskToolDetails,
+			};
 		},
-		renderCall: (args, theme) => renderToolCall("task_ui_list", args.status, theme),
+		renderCall: (args, theme) => renderToolCall("task_ui_list", args.scope ?? args.status, theme),
 		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
 	});
 
@@ -785,10 +901,23 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 			if (params.task_id) {
 				const task = state.tasks.find((item) => item.id === params.task_id);
 				if (!task) throw new Error(`Task not found: ${params.task_id}`);
-				return { content: [{ type: "text", text: taskDetails(task) }], details: { action: "get", task } as TaskToolDetails };
+				const blockers = unresolvedBlockers(task, state.tasks);
+				const suggestedAction = suggestedActionForTask(task, state.tasks);
+				return {
+					content: [{ type: "text", text: resultText(taskDetails(task), undefined, suggestedAction) }],
+					details: { action: "get", task, blockers, isBlocked: blockers.length > 0, suggestedAction } as TaskToolDetails,
+				};
 			}
 			const dashboard = getTaskDashboard(state);
-			return { content: [{ type: "text", text: dashboardDetails(dashboard) }], details: { action: "get_dashboard", dashboard } as TaskToolDetails };
+			const suggestedAction = dashboard.active[0]
+				? suggestedActionForTask(dashboard.active[0], state.tasks)
+				: dashboard.next
+					? suggestedActionForTask(dashboard.next, state.tasks)
+					: 'Call task_ui_create({ subject: "Describe the task" }) to project new work when needed.';
+			return {
+				content: [{ type: "text", text: resultText(dashboardDetails(dashboard), undefined, suggestedAction) }],
+				details: { action: "get_dashboard", dashboard, suggestedAction } as TaskToolDetails,
+			};
 		},
 		renderCall: (args, theme) => renderToolCall("task_ui_get", args.task_id ?? "active + next", theme),
 		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
@@ -817,6 +946,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 			output_tokens: Type.Optional(Type.Number({ minimum: 0 })),
 		}),
 		async execute(_id, params) {
+			const readyBefore = new Set(listTasks(state, { scope: "ready" }).map((task) => task.id));
 			const result = updateTask(state, {
 				taskId: params.task_id,
 				subject: params.subject,
@@ -833,8 +963,18 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 				inputTokens: params.input_tokens,
 				outputTokens: params.output_tokens,
 			});
+			const newlyReady = listTasks(result.state, { scope: "ready" }).filter((task) => !readyBefore.has(task.id));
+			const changedFields = Object.entries(params)
+				.filter(([key, value]) => key !== "task_id" && value !== undefined)
+				.map(([key]) => key);
+			const reachedTerminal = params.status === "completed" || params.status === "failed" || params.status === "stopped";
+			const suggestedNextTask = reachedTerminal ? getTaskDashboard(result.state).next ?? null : undefined;
+			const suggestedAction = suggestedActionForTask(result.task, result.state.tasks);
 			persistMutation(result.state);
-			return { content: [{ type: "text", text: `Updated UI projection: ${taskSummary(result.task)}. Backend unchanged.` }], details: { action: "update", task: result.task } as TaskToolDetails };
+			return {
+				content: [{ type: "text", text: resultText(`Updated UI projection: ${taskSummary(result.task)}. Backend unchanged.`, suggestedNextTask, suggestedAction) }],
+				details: { action: "update", task: result.task, changedFields, newlyReady, suggestedNextTask, suggestedAction } as TaskToolDetails,
+			};
 		},
 		renderCall: (args, theme) => renderToolCall("task_ui_update", args.task_id, theme),
 		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
@@ -867,7 +1007,13 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 			}
 			const output = task.output.slice(-(params.limit ?? 10));
 			const text = output.length ? output.map((entry) => `${entry.timestamp} ${entry.text}`).join("\n") : "No projected output";
-			return { content: [{ type: "text", text }], details: { action: `output:${params.operation}`, task } as TaskToolDetails };
+			const suggestedAction = params.operation === "append"
+				? `Call task_ui_output({ task_id: ${JSON.stringify(task.id)}, operation: "read" }) to inspect projected output.`
+				: undefined;
+			return {
+				content: [{ type: "text", text: resultText(text, undefined, suggestedAction) }],
+				details: { action: `output:${params.operation}`, task, outputCount: task.output.length, suggestedAction } as TaskToolDetails,
+			};
 		},
 		renderCall: (args, theme) => renderToolCall("task_ui_output", `${args.operation} ${args.task_id}`, theme),
 		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
@@ -881,8 +1027,15 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		executionMode: "sequential",
 		parameters: Type.Object({ task_id: Type.String() }),
 		async execute(_id, params) {
-			persistMutation(removeTask(state, params.task_id));
-			return { content: [{ type: "text", text: `Removed ${params.task_id} from the UI projection. Backend unchanged.` }], details: { action: "remove" } as TaskToolDetails };
+			const detachedChildren = state.tasks.filter((task) => task.parentId === params.task_id).map((task) => task.id);
+			const nextState = removeTask(state, params.task_id);
+			const suggestedNextTask = getTaskDashboard(nextState).next ?? null;
+			const suggestedAction = 'Call task_ui_list({ scope: "all" }) to inspect the remaining projection.';
+			persistMutation(nextState);
+			return {
+				content: [{ type: "text", text: resultText(`Removed ${params.task_id} from the UI projection. Backend unchanged.`, suggestedNextTask, suggestedAction) }],
+				details: { action: "remove", detachedChildren, suggestedNextTask, suggestedAction } as TaskToolDetails,
+			};
 		},
 		renderCall: (args, theme) => renderToolCall("task_ui_remove", args.task_id, theme),
 		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
@@ -896,9 +1049,13 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		executionMode: "sequential",
 		parameters: Type.Object({}),
 		async execute() {
-			const count = state.tasks.length;
+			const removedCount = state.tasks.length;
+			const suggestedAction = 'Call task_ui_batch_create({ tasks: [{ subject: "Describe the task" }] }) to rebuild the projection when needed.';
 			persistMutation(createInitialTaskUiState());
-			return { content: [{ type: "text", text: `Cleared ${count} projected tasks. Backend unchanged.` }], details: { action: "clear", tasks: [] } as TaskToolDetails };
+			return {
+				content: [{ type: "text", text: resultText(`Cleared ${removedCount} projected tasks. Backend unchanged.`, null, suggestedAction) }],
+				details: { action: "clear", tasks: [], removedCount, suggestedNextTask: null, suggestedAction } as TaskToolDetails,
+			};
 		},
 		renderCall: (_args, theme) => renderToolCall("task_ui_clear", undefined, theme),
 		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
@@ -913,9 +1070,15 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		parameters: Type.Object({ task_id: Type.String(), reason: Type.Optional(Type.String()) }),
 		async execute(_id, params) {
 			let result = updateTask(state, { taskId: params.task_id, status: "stopped", executing: false });
-			if (params.reason?.trim()) result = appendTaskOutput(result.state, params.task_id, `Stopped: ${params.reason.trim()}`);
+			const reason = params.reason?.trim();
+			if (reason) result = appendTaskOutput(result.state, params.task_id, `Stopped: ${reason}`);
+			const suggestedNextTask = getTaskDashboard(result.state).next ?? null;
+			const suggestedAction = 'Call task_ui_list({ scope: "ready" }) to find work that can start.';
 			persistMutation(result.state);
-			return { content: [{ type: "text", text: `Moved ${params.task_id} to stopped UI history and advanced focus. Backend unchanged.` }], details: { action: "stop", task: result.task } as TaskToolDetails };
+			return {
+				content: [{ type: "text", text: resultText(`Moved ${params.task_id} to stopped UI history and advanced focus. Backend unchanged.`, suggestedNextTask, suggestedAction) }],
+				details: { action: "stop", task: result.task, reason, suggestedNextTask, suggestedAction } as TaskToolDetails,
+			};
 		},
 		renderCall: (args, theme) => renderToolCall("task_ui_stop", args.task_id, theme),
 		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
