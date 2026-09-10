@@ -1,5 +1,11 @@
 # @mblarsen/pi-task-ui
 
+## 2.2.0
+
+### Minor Changes
+
+- e299574: Show task descriptions in a dimmed sidebar panel and a scrollable task browser details view.
+
 ## 2.1.0
 
 ### Minor Changes
