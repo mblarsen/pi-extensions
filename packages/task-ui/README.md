@@ -59,7 +59,7 @@ Parents are independently executable. Their status and progress are not derived 
 |---|---|
 | `task_ui_create` | Add or mirror one numbered root task or subtask, optionally with a label |
 | `task_ui_batch_create` | Atomically add or mirror several tasks, including nested hierarchies |
-| `task_ui_list` | List projected tasks, optionally filtered by status |
+| `task_ui_list` | List projected tasks by one required workflow scope or exact status |
 | `task_ui_get` | Read one task; without `task_id`, return active, next, and focused tasks |
 | `task_ui_update` | Update the label, status, blockers, focus-driving state, progress, and execution telemetry |
 | `task_ui_output` | Append, read, or clear projected output |
@@ -69,7 +69,45 @@ Parents are independently executable. Their status and progress are not derived 
 
 `task_ui_remove`, `task_ui_clear`, and `task_ui_stop` do not modify backend work. The agent must perform matching backend actions separately when needed.
 
-The bundled `task-ui` Agent Skill teaches the agent when to create task sets, mirror backend transitions, maintain execution telemetry, and avoid fabricating state. Invoke it explicitly with `/skill:task-ui` or let Pi load it when the request matches its description.
+### Listing tasks
+
+`task_ui_list` requires exactly one selector. Use `scope` for workflow-oriented groups:
+
+| Scope | Tasks |
+|---|---|
+| `all` | Every projected task |
+| `open` | `pending` and `in_progress` tasks |
+| `ready` | Unblocked `pending` tasks |
+| `active` | `in_progress` tasks |
+| `history` | `completed`, `failed`, and `stopped` tasks |
+
+Use `status` to retrieve one exact stored state: `pending`, `in_progress`, `completed`, `failed`, or `stopped`. Exact `pending` results include blocked tasks, while `scope: "ready"` excludes them.
+
+```ts
+task_ui_list({ scope: "ready" });
+task_ui_list({ status: "failed" });
+```
+
+Providing both selectors or neither selector is invalid.
+
+### Agent-oriented results
+
+Tool results can include two independent forms of guidance:
+
+- `suggestedNextTask` contains the next unblocked pending task when relevant. `null` means that none is ready; omission means that the result does not make a next-task recommendation.
+- `suggestedAction` contains a textual example of a sensible later `task_ui_*` call.
+
+Other structured result additions include list selectors and status counts, created IDs, changed fields, newly ready tasks, unresolved blockers, output counts, detached children, removed counts, and recorded stop reasons.
+
+For example:
+
+```text
+Later call task_ui_update({ task_id: "worker-1", status: "completed", executing: false, progress: 100 }) when the work is complete.
+```
+
+These fields describe the UI projection only. They do not start, stop, or inspect backend work.
+
+The bundled `task-ui` Agent Skill teaches the agent when to create task sets, mirror backend transitions, maintain execution telemetry, use list scopes and exact statuses, and avoid fabricating state. Invoke it explicitly with `/skill:task-ui` or let Pi load it when the request matches its description.
 
 ## Checkpoint reminders
 

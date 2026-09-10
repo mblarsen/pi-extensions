@@ -1,10 +1,13 @@
 export const TASK_UI_STATE_VERSION = 5 as const;
 
 export const TASK_STATUSES = ["pending", "in_progress", "completed", "failed", "stopped"] as const;
+export const TASK_LIST_SCOPES = ["all", "open", "ready", "active", "history"] as const;
 export const MAX_TASK_OUTPUT_CHARS = 2_000;
 export const MAX_TASK_OUTPUT_ENTRIES = 100;
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+export type TaskListScope = (typeof TASK_LIST_SCOPES)[number];
+export type TaskListSelector = { scope: TaskListScope } | { status: TaskStatus };
 
 export interface TaskOutputEntry {
 	text: string;
@@ -282,11 +285,27 @@ function resolveParentUpdate(
 	return { parentId, subtaskNumber: nextSubtaskNumber(tasks, parentId) };
 }
 
+function isReadyTask(task: TaskRecord, statusById: Map<string, TaskStatus>): boolean {
+	return task.status === "pending" && task.blockedBy.every((id) => statusById.get(id) === "completed");
+}
+
+export function listTasks(state: TaskUiState, selector: TaskListSelector): TaskRecord[] {
+	const statusById = new Map(state.tasks.map((task) => [task.id, task.status]));
+	return state.tasks.filter((task) => {
+		if ("status" in selector) return task.status === selector.status;
+		switch (selector.scope) {
+			case "all": return true;
+			case "open": return task.status === "pending" || task.status === "in_progress";
+			case "ready": return isReadyTask(task, statusById);
+			case "active": return task.status === "in_progress";
+			case "history": return task.status === "completed" || task.status === "failed" || task.status === "stopped";
+		}
+	}).map(cloneTask);
+}
+
 export function getNextTask(tasks: TaskRecord[]): TaskRecord | undefined {
 	const statusById = new Map(tasks.map((task) => [task.id, task.status]));
-	const next = tasks.find((task) =>
-		task.status === "pending" && task.blockedBy.every((id) => statusById.get(id) === "completed")
-	);
+	const next = tasks.find((task) => isReadyTask(task, statusById));
 	return next ? cloneTask(next) : undefined;
 }
 

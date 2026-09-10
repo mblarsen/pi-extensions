@@ -15,7 +15,10 @@ import taskUiExtension, {
 
 type RegisteredTool = {
 	name: string;
-	execute: (id: string, params: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text: string }> }>;
+	execute: (id: string, params: Record<string, unknown>) => Promise<{
+		content: Array<{ type: string; text: string }>;
+		details?: Record<string, unknown>;
+	}>;
 };
 
 function extensionHarness(): { pi: ExtensionAPI; tools: RegisteredTool[] } {
@@ -534,6 +537,80 @@ test("batch creation, dashboard reads, stopping, and deletion stay within the UI
 	assert.match(removed.content[0].text, /Removed two/);
 	const cleared = await tool("task_ui_clear").execute("clear", {});
 	assert.match(cleared.content[0].text, /Cleared 2 projected tasks/);
-	const empty = await tool("task_ui_list").execute("list-empty", {});
-	assert.equal(empty.content[0].text, "No projected tasks");
+	const empty = await tool("task_ui_list").execute("list-empty", { scope: "all" });
+	assert.match(empty.content[0].text, /^No projected tasks matched the selector/);
+	assert.match(empty.content[0].text, /Suggested next ready task: none/);
+});
+
+test("list requires exactly one workflow scope or exact status", async () => {
+	const { pi, tools } = extensionHarness();
+	taskUiExtension(pi);
+	const tool = (name: string) => tools.find((item) => item.name === name)!;
+
+	await tool("task_ui_batch_create").execute("batch", {
+		tasks: [
+			{ id: "blocker", subject: "Blocker", status: "in_progress" },
+			{ id: "blocked", subject: "Blocked", blocked_by: ["blocker"] },
+			{ id: "ready", subject: "Ready" },
+			{ id: "done", subject: "Done", status: "completed" },
+			{ id: "failed", subject: "Failed", status: "failed" },
+		],
+	});
+
+	await assert.rejects(() => tool("task_ui_list").execute("missing", {}), /exactly one of scope or status/);
+	await assert.rejects(
+		() => tool("task_ui_list").execute("both", { scope: "all", status: "pending" }),
+		/exactly one of scope or status/,
+	);
+
+	const open = await tool("task_ui_list").execute("open", { scope: "open" });
+	assert.deepEqual((open.details?.tasks as Array<{ id: string }>).map((task) => task.id), ["blocker", "blocked", "ready"]);
+	assert.deepEqual(open.details?.selector, { scope: "open" });
+	assert.equal((open.details?.counts as { total: number }).total, 5);
+
+	const ready = await tool("task_ui_list").execute("ready", { scope: "ready" });
+	assert.deepEqual((ready.details?.tasks as Array<{ id: string }>).map((task) => task.id), ["ready"]);
+	assert.equal((ready.details?.suggestedNextTask as { id: string }).id, "ready");
+	assert.match(ready.content[0].text, /task_ui_update\(\{ task_id:/);
+
+	const history = await tool("task_ui_list").execute("history", { scope: "history" });
+	assert.deepEqual((history.details?.tasks as Array<{ id: string }>).map((task) => task.id), ["done", "failed"]);
+
+	const pending = await tool("task_ui_list").execute("pending", { status: "pending" });
+	assert.deepEqual((pending.details?.tasks as Array<{ id: string }>).map((task) => task.id), ["blocked", "ready"]);
+	assert.deepEqual(pending.details?.selector, { status: "pending" });
+	assert.match(pending.details?.suggestedAction as string, /task_ui_list\(\{ scope: "ready" \}\)/);
+
+	const blocked = await tool("task_ui_get").execute("blocked", { task_id: "blocked" });
+	assert.match(blocked.details?.suggestedAction as string, /task_ui_get\(\{ task_id: "blocker" \}\)/);
+});
+
+test("tool results keep next-task data separate from API usage guidance", async () => {
+	const { pi, tools } = extensionHarness();
+	taskUiExtension(pi);
+	const tool = (name: string) => tools.find((item) => item.name === name)!;
+
+	const created = await tool("task_ui_create").execute("create", { id: "one", subject: "One" });
+	assert.equal((created.details?.suggestedNextTask as { id: string }).id, "one");
+	assert.match(created.details?.suggestedAction as string, /task_ui_update\(\{ task_id: "one"/);
+
+	const started = await tool("task_ui_update").execute("start", {
+		task_id: "one",
+		status: "in_progress",
+		executing: true,
+	});
+	assert.equal(started.details?.suggestedNextTask, undefined);
+	assert.match(started.details?.suggestedAction as string, /Later call task_ui_update/);
+
+	await tool("task_ui_create").execute("create-two", { id: "two", subject: "Two" });
+	const completed = await tool("task_ui_update").execute("complete", {
+		task_id: "one",
+		status: "completed",
+		executing: false,
+		progress: 100,
+	});
+	assert.equal((completed.details?.suggestedNextTask as { id: string }).id, "two");
+	assert.match(completed.details?.suggestedAction as string, /task_ui_list\(\{ scope: "ready" \}\)/);
+	assert.deepEqual(completed.details?.changedFields, ["status", "executing", "progress"]);
+	assert.deepEqual((completed.details?.newlyReady as Array<{ id: string }>).map((task) => task.id), []);
 });
