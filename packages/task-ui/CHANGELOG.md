@@ -1,5 +1,11 @@
 # @mblarsen/pi-task-ui
 
+## 2.2.1
+
+### Patch Changes
+
+- 2a13134: Reduce sidebar description spacing and inset separators from the box borders.
+
 ## 2.2.0
 
 ### Minor Changes
