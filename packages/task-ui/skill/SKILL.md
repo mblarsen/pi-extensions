@@ -156,6 +156,14 @@ Do not call `task_ui_list({ scope: "all" })` and filter the returned tasks yours
 
 Use `task_ui_output` only for concise, user-relevant projected output. Do not stream large logs into the sidebar.
 
+## Export Markdown
+
+Call `task_ui_to_md({})` when the user needs a readable Markdown handoff of the complete projection.
+
+The extension generates numbered headings, descriptions, statuses, and local dependency links. The text result contains only Markdown and is ready to display, copy, or save without reformatting.
+
+The export includes every task status. It excludes labels, focus, progress, owners, timestamps, task output, and execution telemetry.
+
 ## Follow tool-result guidance
 
 Tool results can contain two separate agent-oriented fields:
@@ -170,6 +178,7 @@ The structured `details` additions are:
 | `create` | `suggestedNextTask`, `suggestedAction` |
 | `batch_create` | `createdIds`, `suggestedNextTask`, `suggestedAction` |
 | `list` | `selector`, full-projection `counts`, `suggestedNextTask`, `suggestedAction` |
+| `to_md` | ordered `tasks`, full-projection `counts` |
 | `get` | `blockers`, `isBlocked`, `suggestedAction` |
 | `get_dashboard` | `suggestedAction`; the dashboard already contains `next` |
 | `update` | `changedFields`, `newlyReady`, `suggestedAction`; terminal transitions also include `suggestedNextTask` |

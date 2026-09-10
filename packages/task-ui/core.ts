@@ -270,6 +270,35 @@ export function getTaskDisplayNumber(task: TaskRecord, tasks: TaskRecord[]): str
 	return labels.length ? labels.join(".") : String(task.number);
 }
 
+export function orderTasksForDisplay(tasks: TaskRecord[]): TaskRecord[] {
+	const includedIds = new Set(tasks.map((task) => task.id));
+	const children = new Map<string, TaskRecord[]>();
+	const roots: TaskRecord[] = [];
+
+	for (const task of tasks) {
+		if (task.parentId && includedIds.has(task.parentId)) {
+			const siblings = children.get(task.parentId) ?? [];
+			siblings.push(task);
+			children.set(task.parentId, siblings);
+		} else {
+			roots.push(task);
+		}
+	}
+
+	const byNumber = (left: TaskRecord, right: TaskRecord) =>
+		(left.subtaskNumber ?? left.number) - (right.subtaskNumber ?? right.number) || left.number - right.number;
+	roots.sort((left, right) => left.number - right.number);
+	for (const siblings of children.values()) siblings.sort(byNumber);
+
+	const ordered: TaskRecord[] = [];
+	const visit = (task: TaskRecord) => {
+		ordered.push(task);
+		for (const child of children.get(task.id) ?? []) visit(child);
+	};
+	for (const root of roots) visit(root);
+	return ordered;
+}
+
 function resolveParentUpdate(
 	tasks: TaskRecord[],
 	current: TaskRecord,
