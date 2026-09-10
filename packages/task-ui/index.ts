@@ -434,6 +434,7 @@ export class TaskBarComponent {
 		const tasks = state.tasks;
 		if (!tasks.length) return [];
 		const work = orderTasksForDisplay(tasks.filter((task) => task.status === "in_progress" || task.status === "pending"));
+		const visibleWork = work.slice(0, MAX_VISIBLE_WORK_TASKS);
 		const history = tasks
 			.filter((task) => ["completed", "failed", "stopped"].includes(task.status))
 			.sort((left, right) => (right.terminalAt ?? right.updatedAt).localeCompare(left.terminalAt ?? left.updatedAt) || right.number - left.number);
@@ -443,7 +444,7 @@ export class TaskBarComponent {
 
 		if (tasks.length > 0) {
 			if (work.length) {
-				for (const task of work.slice(0, MAX_VISIBLE_WORK_TASKS)) {
+				for (const task of visibleWork) {
 					lines.push(framedTaskRow(taskLine(task, tasks, task.id === state.focusedTaskId, this.getSpinnerFrame(), this.theme), task.label, width, this.theme));
 					const metadata = taskMetadata(task, tasks, this.theme);
 					if (metadata) lines.push(framedRow(metadata, width, this.theme));
@@ -469,7 +470,7 @@ export class TaskBarComponent {
 
 		lines.push(this.theme.fg("borderMuted", `╰${"─".repeat(Math.max(0, width - 2))}╯`));
 
-		const descriptions = orderTasksForDisplay(tasks)
+		const descriptions = visibleWork
 			.filter((task) => task.status === "in_progress" && task.executing && task.description?.trim())
 			.slice(0, MAX_SIDEBAR_DESCRIPTION_TASKS)
 			.map((task) => wrapDescription(task.description!, Math.max(1, width - 4)));

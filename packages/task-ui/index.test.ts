@@ -409,6 +409,28 @@ test("sidebar shows descriptions for executing tasks in depth-first order", () =
 	assert.ok(styled.some(([color, text]) => color === "dim" && text === "Parent context"));
 });
 
+test("sidebar excludes descriptions for tasks hidden by the work limit", () => {
+	const state = createTasks(createInitialTaskUiState(), [
+		{ id: "first", subject: "First visible task", description: "First visible context", executing: true },
+		{ id: "second", subject: "Second visible task", description: "Second visible context", executing: true },
+		...Array.from({ length: 6 }, (_, index) => ({ id: `pending-${index}`, subject: `Pending ${index}` })),
+		{ id: "hidden", subject: "Hidden executing task", description: "Hidden executing context", executing: true },
+	]).state;
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const lines = new TaskBarComponent(() => state, () => "✳", theme as never, () => 40)
+		.render(60)
+		.map(stripVTControlCharacters);
+
+	assert.ok(lines.some((line) => line.includes("First visible context")));
+	assert.ok(lines.some((line) => line.includes("Second visible context")));
+	assert.equal(lines.some((line) => line.includes("Hidden executing task")), false);
+	assert.equal(lines.some((line) => line.includes("Hidden executing context")), false);
+});
+
 test("sidebar crops descriptions to three lines and respects its height budget", () => {
 	const state = createTasks(createInitialTaskUiState(), [{
 		id: "work",
