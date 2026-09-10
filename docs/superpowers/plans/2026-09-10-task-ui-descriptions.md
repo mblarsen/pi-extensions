@@ -258,3 +258,12 @@ git commit -m "feat(task-ui): show task descriptions"
 ```
 
 Do not publish or create a release PR unless the user requests it.
+
+## Progress
+
+- [x] Added description wrapping and cropping helpers.
+- [x] Added the responsive sidebar description box.
+- [x] Added browse details mode and full-text scrolling.
+- [x] Updated the README, agent skill, tool guidance, and Changeset.
+- [x] Passed `npm ci`, `npm run check`, and `npx changeset status`.
+- [x] Checked 80x24, 120x40, and 200x60 layouts for overflow and selection visibility.

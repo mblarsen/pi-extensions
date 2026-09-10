@@ -5,6 +5,7 @@ import {
 	Text,
 	truncateToWidth,
 	visibleWidth,
+	wrapTextWithAnsi,
 	type KeybindingsManager,
 	type OverlayHandle,
 } from "@earendil-works/pi-tui";
@@ -45,6 +46,9 @@ const STATE_ENTRY_TYPE = "task-ui-state";
 const OVERLAY_MIN_TERMINAL_WIDTH = 72;
 const MAX_VISIBLE_WORK_TASKS = 7;
 const MAX_VISIBLE_HISTORY_TASKS = 3;
+const MAX_SIDEBAR_DESCRIPTION_TASKS = 3;
+const MAX_SIDEBAR_DESCRIPTION_LINES = 3;
+const MAX_BROWSER_DETAILS_RATIO = 0.4;
 const SPINNER_FRAMES = ["✳", "✽", "•"] as const;
 const COMPLETED_ICON = "\x1b[38;2;34;197;94m✔\x1b[39m";
 const LABEL_COLORS = ["accent", "mdLink", "syntaxType", "syntaxFunction", "syntaxString", "syntaxNumber", "syntaxKeyword", "syntaxVariable"] as const;
@@ -178,7 +182,7 @@ function createTaskSchema() {
 	return Type.Object({
 		id: Type.Optional(Type.String({ description: "Backend task ID to mirror; generated when omitted" })),
 		subject: Type.String({ description: "Short task title" }),
-		description: Type.Optional(Type.String()),
+		description: Type.Optional(Type.String({ description: "Context that supplements the task title and helps users or later agent turns recall the work" })),
 		label: Type.Optional(Type.String({ description: "Short right-aligned label, without brackets" })),
 		status: Type.Optional(StringEnum(TASK_STATUSES)),
 		progress: Type.Optional(Type.Number({ minimum: 0, maximum: 100 })),
@@ -384,15 +388,45 @@ function taskMetadata(task: TaskRecord, tasks: TaskRecord[], theme: Theme): stri
 	return blocked ? theme.fg("dim", `${indent}${blocked}`) : undefined;
 }
 
+function wrapDescription(description: string, width: number): string[] {
+	const safeWidth = Math.max(1, width);
+	return description.split("\n").flatMap((line) => line.length ? wrapTextWithAnsi(line, safeWidth) : [""]);
+}
+
+function cropDescription(lines: string[], maxLines: number, width: number): string[] {
+	if (maxLines <= 0) return [];
+	const cropped = lines.slice(0, maxLines);
+	if (lines.length <= maxLines) return cropped;
+	const last = cropped.length - 1;
+	cropped[last] = truncateToWidth(cropped[last] ?? "", Math.max(0, width - 1), "") + "…";
+	return cropped;
+}
+
+function dimmedBoxRow(text: string, width: number, theme: Theme): string {
+	if (width < 2) return theme.fg("dim", truncateToWidth(text, width, ""));
+	return theme.fg("dim", "│") + fit(` ${theme.fg("dim", text)}`, width - 2, theme) + theme.fg("dim", "│");
+}
+
+function dimmedBoxDivider(width: number, theme: Theme): string {
+	return theme.fg("dim", `├${"─".repeat(Math.max(0, width - 2))}┤`);
+}
+
 export class TaskBarComponent {
 	private readonly getState: () => TaskUiState;
 	private readonly getSpinnerFrame: () => string;
 	private readonly theme: Theme;
+	private readonly getViewportHeight: () => number;
 
-	constructor(getState: () => TaskUiState, getSpinnerFrame: () => string, theme: Theme) {
+	constructor(
+		getState: () => TaskUiState,
+		getSpinnerFrame: () => string,
+		theme: Theme,
+		getViewportHeight: () => number = () => Number.POSITIVE_INFINITY,
+	) {
 		this.getState = getState;
 		this.getSpinnerFrame = getSpinnerFrame;
 		this.theme = theme;
+		this.getViewportHeight = getViewportHeight;
 	}
 
 	render(width: number): string[] {
@@ -434,6 +468,38 @@ export class TaskBarComponent {
 		}
 
 		lines.push(this.theme.fg("borderMuted", `╰${"─".repeat(Math.max(0, width - 2))}╯`));
+
+		const descriptions = orderTasksForDisplay(tasks)
+			.filter((task) => task.status === "in_progress" && task.executing && task.description?.trim())
+			.slice(0, MAX_SIDEBAR_DESCRIPTION_TASKS)
+			.map((task) => wrapDescription(task.description!, Math.max(1, width - 4)));
+		let remainingRows = Math.floor(this.getViewportHeight()) - lines.length - 1;
+		if (!descriptions.length || remainingRows < 3) {
+			return lines.map((line) => truncateToWidth(line, width, ""));
+		}
+
+		const descriptionLines: string[] = [];
+		let contentRows = remainingRows - 2;
+		for (const wrapped of descriptions) {
+			const dividerRows = descriptionLines.length ? 1 : 0;
+			if (contentRows <= dividerRows) break;
+			const visible = cropDescription(wrapped, Math.min(MAX_SIDEBAR_DESCRIPTION_LINES, contentRows - dividerRows), Math.max(1, width - 4));
+			if (!visible.length) break;
+			if (dividerRows) {
+				descriptionLines.push(dimmedBoxDivider(width, this.theme));
+				contentRows -= 1;
+			}
+			descriptionLines.push(...visible.map((line) => dimmedBoxRow(line, width, this.theme)));
+			contentRows -= visible.length;
+		}
+		if (!descriptionLines.length) return lines.map((line) => truncateToWidth(line, width, ""));
+
+		lines.push(
+			"",
+			this.theme.fg("dim", `╭${"─".repeat(Math.max(0, width - 2))}╮`),
+			...descriptionLines,
+			this.theme.fg("dim", `╰${"─".repeat(Math.max(0, width - 2))}╯`),
+		);
 		return lines.map((line) => truncateToWidth(line, width, ""));
 	}
 
@@ -444,6 +510,11 @@ export class TaskBrowserComponent {
 	private selectedTaskId: string | undefined;
 	private scrollOffset = 0;
 	private awaitingG = false;
+	private detailsOpen = false;
+	private descriptionScrollOffset = 0;
+	private descriptionLines: string[] = [];
+	private detailsCapacity = 1;
+	private listCapacity = 1;
 	private readonly getState: () => TaskUiState;
 	private readonly getSpinnerFrame: () => string;
 	private readonly getViewportHeight: () => number;
@@ -468,6 +539,7 @@ export class TaskBrowserComponent {
 		this.keybindings = keybindings;
 		this.requestRender = requestRender;
 		this.onClose = onClose;
+		this.listCapacity = Math.max(1, Math.floor(this.getViewportHeight()) - 3);
 		const state = this.getState();
 		const ordered = orderTasksForDisplay(state.tasks);
 		this.selectedTaskId = ordered.some((task) => task.id === state.focusedTaskId)
@@ -484,6 +556,40 @@ export class TaskBrowserComponent {
 			this.onClose("off");
 			return;
 		}
+		if (this.detailsOpen) {
+			if (data === "d" || this.keybindings.matches(data, "tui.select.cancel")) {
+				this.detailsOpen = false;
+				this.descriptionScrollOffset = 0;
+				this.requestRender();
+				return;
+			}
+			if (data === "q") {
+				this.onClose("sidebar");
+				return;
+			}
+			const halfPage = Math.max(1, Math.floor(this.detailsCapacity / 2));
+			const maxOffset = Math.max(0, this.descriptionLines.length - this.detailsCapacity);
+			if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
+				this.descriptionScrollOffset = Math.max(0, this.descriptionScrollOffset - 1);
+			} else if (this.keybindings.matches(data, "tui.select.down") || data === "j") {
+				this.descriptionScrollOffset = Math.min(maxOffset, this.descriptionScrollOffset + 1);
+			} else if (matchesKey(data, "ctrl+u")) {
+				this.descriptionScrollOffset = Math.max(0, this.descriptionScrollOffset - halfPage);
+			} else if (matchesKey(data, "ctrl+d")) {
+				this.descriptionScrollOffset = Math.min(maxOffset, this.descriptionScrollOffset + halfPage);
+			} else {
+				return;
+			}
+			this.requestRender();
+			return;
+		}
+		if (data === "d") {
+			this.awaitingG = false;
+			this.detailsOpen = true;
+			this.descriptionScrollOffset = 0;
+			this.requestRender();
+			return;
+		}
 		if (this.keybindings.matches(data, "tui.select.cancel") || data === "q") {
 			this.onClose("sidebar");
 			return;
@@ -492,7 +598,7 @@ export class TaskBrowserComponent {
 		const tasks = orderTasksForDisplay(this.getState().tasks);
 		if (!tasks.length) return;
 		const currentIndex = Math.max(0, tasks.findIndex((task) => task.id === this.selectedTaskId));
-		const halfPage = Math.max(1, Math.floor(this.getListCapacity() / 2));
+		const halfPage = Math.max(1, Math.floor(this.listCapacity / 2));
 		let nextIndex = currentIndex;
 
 		if (this.awaitingG) {
@@ -516,6 +622,7 @@ export class TaskBrowserComponent {
 		}
 
 		this.selectedTaskId = tasks[nextIndex]?.id;
+		this.descriptionScrollOffset = 0;
 		this.requestRender();
 	}
 
@@ -526,12 +633,37 @@ export class TaskBrowserComponent {
 		if (selectedIndex < 0 && tasks.length) {
 			selectedIndex = 0;
 			this.selectedTaskId = tasks[0]?.id;
+			this.descriptionScrollOffset = 0;
 		}
 
-		const capacity = this.getListCapacity();
+		const viewportHeight = Math.max(4, Math.floor(this.getViewportHeight()));
+		const showDetailsDivider = this.detailsOpen && viewportHeight >= 5;
+		const showDetailsFooter = this.detailsOpen && viewportHeight >= 6;
+		if (this.detailsOpen) {
+			const selectedTask = selectedIndex >= 0 ? tasks[selectedIndex] : undefined;
+			const description = selectedTask?.description?.trim() || "No description";
+			this.descriptionLines = wrapDescription(description, Math.max(1, width - 4));
+			const chromeRows = 2 + Number(showDetailsDivider) + Number(showDetailsFooter);
+			const availableContentRows = Math.max(2, viewportHeight - chromeRows);
+			this.detailsCapacity = Math.max(1, Math.min(
+				this.descriptionLines.length,
+				Math.max(1, Math.floor(viewportHeight * MAX_BROWSER_DETAILS_RATIO)),
+				availableContentRows - 1,
+			));
+			this.listCapacity = Math.max(1, availableContentRows - this.detailsCapacity);
+		} else {
+			this.descriptionLines = [];
+			this.detailsCapacity = 1;
+			this.listCapacity = Math.max(1, viewportHeight - 3);
+		}
+
 		if (selectedIndex < this.scrollOffset) this.scrollOffset = selectedIndex;
-		if (selectedIndex >= this.scrollOffset + capacity) this.scrollOffset = selectedIndex - capacity + 1;
-		this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, Math.max(0, tasks.length - capacity)));
+		if (selectedIndex >= this.scrollOffset + this.listCapacity) this.scrollOffset = selectedIndex - this.listCapacity + 1;
+		this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, Math.max(0, tasks.length - this.listCapacity)));
+		this.descriptionScrollOffset = Math.max(
+			0,
+			Math.min(this.descriptionScrollOffset, Math.max(0, this.descriptionLines.length - this.detailsCapacity)),
+		);
 
 		const position = selectedIndex >= 0 ? `${selectedIndex + 1}/${tasks.length}` : "0/0";
 		const title = ` Tasks · ${position} `;
@@ -541,7 +673,7 @@ export class TaskBrowserComponent {
 		if (!tasks.length) {
 			lines.push(framedRow(this.theme.fg("muted", "No projected tasks"), width, this.theme));
 		} else {
-			for (const [visibleIndex, task] of tasks.slice(this.scrollOffset, this.scrollOffset + capacity).entries()) {
+			for (const [visibleIndex, task] of tasks.slice(this.scrollOffset, this.scrollOffset + this.listCapacity).entries()) {
 				const taskIndex = this.scrollOffset + visibleIndex;
 				const selected = taskIndex === selectedIndex;
 				const prefix = selected ? this.theme.fg("accent", "› ") : "  ";
@@ -555,20 +687,32 @@ export class TaskBrowserComponent {
 			}
 		}
 
-		lines.push(framedRow(
-			this.theme.fg("dim", "↑↓/jk move · Ctrl-U/D half-page · gg/gG jump · Esc/q sidebar · Alt-U off"),
-			width,
-			this.theme,
-		));
+		if (this.detailsOpen) {
+			const rangeStart = this.descriptionScrollOffset + 1;
+			const rangeEnd = Math.min(this.descriptionLines.length, this.descriptionScrollOffset + this.detailsCapacity);
+			if (showDetailsDivider) lines.push(divider(`details · ${rangeStart}–${rangeEnd}/${this.descriptionLines.length}`, width, this.theme));
+			for (const line of this.descriptionLines.slice(this.descriptionScrollOffset, this.descriptionScrollOffset + this.detailsCapacity)) {
+				lines.push(framedRow(this.theme.fg("dim", line), width, this.theme));
+			}
+			if (showDetailsFooter) {
+				lines.push(framedRow(
+					this.theme.fg("dim", "d/Esc close · ↑↓/jk scroll · Ctrl-U/D half-page · q sidebar · Alt-U off"),
+					width,
+					this.theme,
+				));
+			}
+		} else {
+			lines.push(framedRow(
+				this.theme.fg("dim", "↑↓/jk move · Ctrl-U/D half-page · gg/gG jump · d details · Esc/q sidebar · Alt-U off"),
+				width,
+				this.theme,
+			));
+		}
 		lines.push(this.theme.fg("borderAccent", `╰${"─".repeat(Math.max(0, width - 2))}╯`));
 		return lines.map((line) => truncateToWidth(line, width, ""));
 	}
 
 	invalidate(): void {}
-
-	private getListCapacity(): number {
-		return Math.max(1, this.getViewportHeight() - 3);
-	}
 }
 
 function renderToolCall(name: string, detail: string | undefined, theme: Theme): Text {
@@ -654,7 +798,12 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		}
 		void ctx.ui.custom<void>((tui, theme) => {
 			requestRender = () => tui.requestRender();
-			return new TaskBarComponent(() => state, () => SPINNER_FRAMES[spinnerFrame], theme);
+			return new TaskBarComponent(
+				() => state,
+				() => SPINNER_FRAMES[spinnerFrame],
+				theme,
+				() => Math.max(0, Math.floor(tui.terminal.rows * 0.76)),
+			);
 		}, {
 			overlay: true,
 			overlayOptions: {
@@ -933,7 +1082,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		parameters: Type.Object({
 			task_id: Type.String(),
 			subject: Type.Optional(Type.String()),
-			description: Type.Optional(Type.String()),
+			description: Type.Optional(Type.String({ description: "Context that supplements the task title and helps users or later agent turns recall the work" })),
 			label: Type.Optional(Type.String({ description: "Short right-aligned label, without brackets; empty string clears it" })),
 			status: Type.Optional(StringEnum(TASK_STATUSES)),
 			progress: Type.Optional(Type.Number({ minimum: 0, maximum: 100 })),

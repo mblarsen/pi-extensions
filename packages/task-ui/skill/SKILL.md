@@ -25,15 +25,20 @@ Prefer `task_ui_batch_create` when the initial set is known. Use `task_ui_create
 Give each task:
 
 - a concise outcome-oriented `subject`
+- an optional `description` when context will help the user or a later agent turn recall the work
 - the backend task ID as `id` when mirroring a backend
 - an optional short `label` when a meaningful category or workflow applies, such as `research` or `grilling`; do not add brackets
 - `parent_id` when the task is a subtask
 - `blocked_by` IDs for real dependencies
 - `pending` status until work begins
 
+A description supplements the subject. Do not repeat the task title in the description. Omit the description for trivial tasks or when no confirmed context is available.
+
+The sidebar shows descriptions only for executing `in_progress` tasks. It selects up to three descriptions in depth-first display order and skips tasks without descriptions. Users can press `d` in browse mode to read the complete selected-task description.
+
 Labels render right-aligned. The same label receives the same theme-derived color everywhere; omit the label rather than inventing a meaningless category.
 
-Do not invent dependencies, progress, token counts, or backend IDs.
+Do not invent descriptions, dependencies, progress, token counts, or backend IDs.
 
 ## Task descriptions
 
