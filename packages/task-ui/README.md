@@ -41,11 +41,11 @@ The Tasks tab shows all projected tasks in stable hierarchy and number order, in
 
 The Inbox tab shows all retained informational entries and unresolved feedback. It puts feedback first and sorts each kind newest-first.
 
-Use `↑`/`↓` or `j`/`k` to move. Use `Ctrl-U`/`Ctrl-D` to move by half a viewport. Use `gg`/`gG` to jump to the first or last item.
+The browser always shows details for the selected item. Task details show the complete task description. Inbox details render the complete stored Markdown summary.
 
-Press `d` to open details for the selected item. Task details show the complete task description. Inbox details render the complete stored Markdown summary. Use `↑`/`↓` or `j`/`k` to scroll details. Use `Ctrl-U`/`Ctrl-D` to scroll by half a pane. Press `d` or `Esc` to close the pane.
+Use `↑`/`↓` or `j`/`k` to move through items. Use `Ctrl-U`/`Ctrl-D` to move by half a viewport. Use `gg`/`gG` to jump to the first or last item. Use `Shift+↑`/`Shift+↓` or `J`/`K` to scroll the selected item's details.
 
-Press `Esc` or `q` to return to the sidebar when the details pane is closed. Press `q` from the details pane to return directly. Press `Alt+U` in browse mode to hide both views. Browse mode does not change the task projection.
+Press `Esc` or `q` to return to the sidebar. Press `Alt+U` in browse mode to hide both views. Browse mode does not change the task projection.
 
 The bar hides responsively below 72 terminal columns. Its `Tasks` panel shows numbered work, nested subtasks, blockers, terminal history, optional right-aligned labels, and projected execution telemetry without a summary or progress bar. Subtasks use stable hierarchical labels such as `#2.1` and `#2.1.1` and render immediately beneath their parent in subtask order. Active and pending work share one stable list capped at the first seven items, so the earliest work retains priority; overflow is summarized as `… and N more`. `history` shows the latest three terminal transitions newest-first and does not reorder them after metadata or output edits. When only history remains, a muted `All done!` message appears above it.
 

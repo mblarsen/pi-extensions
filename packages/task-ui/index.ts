@@ -347,6 +347,18 @@ function divider(label: string, width: number, theme: Theme): string {
 	return framedRow(theme.fg("dim", `${"─".repeat(left)}${labelText}${"─".repeat(right)}`), width, theme);
 }
 
+function browserHeader(activeTab: "tasks" | "inbox", inboxCount: number, position: string, width: number, theme: Theme): string {
+	const tasksTitle = "[ Tasks ]";
+	const inboxTitle = `[ Inbox · ${inboxCount} ]`;
+	const plainTitle = ` ${tasksTitle} ${inboxTitle} · ${position} `;
+	const topFill = Math.max(0, width - visibleWidth(plainTitle) - 2);
+	return theme.fg("borderMuted", "╭ ")
+		+ theme.fg(activeTab === "tasks" ? "accent" : "dim", tasksTitle)
+		+ theme.fg("borderMuted", " ")
+		+ theme.fg(activeTab === "inbox" ? "accent" : "dim", inboxTitle)
+		+ theme.fg("borderMuted", ` · ${position} ${"─".repeat(topFill)}╮`);
+}
+
 function formatTokens(tokens: number): string {
 	if (tokens < 1_000) return String(tokens);
 	if (tokens < 1_000_000) return `${(tokens / 1_000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
@@ -633,7 +645,6 @@ export class TaskBrowserComponent {
 	private scrollOffset = 0;
 	private inboxScrollOffset = 0;
 	private awaitingG = false;
-	private detailsOpen = false;
 	private descriptionScrollOffset = 0;
 	private descriptionLines: string[] = [];
 	private detailsCapacity = 1;
@@ -689,42 +700,20 @@ export class TaskBrowserComponent {
 		if (matchesKey(data, "tab")) {
 			this.activeTab = this.activeTab === "tasks" ? "inbox" : "tasks";
 			this.awaitingG = false;
-			this.detailsOpen = false;
 			this.descriptionScrollOffset = 0;
 			this.requestRender();
 			return;
 		}
-		if (this.detailsOpen) {
-			if (data === "d" || this.keybindings.matches(data, "tui.select.cancel")) {
-				this.detailsOpen = false;
-				this.descriptionScrollOffset = 0;
-				this.requestRender();
-				return;
-			}
-			if (data === "q") {
-				this.onClose("sidebar");
-				return;
-			}
-			const halfPage = Math.max(1, Math.floor(this.detailsCapacity / 2));
-			const maxOffset = Math.max(0, this.descriptionLines.length - this.detailsCapacity);
-			if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
-				this.descriptionScrollOffset = Math.max(0, this.descriptionScrollOffset - 1);
-			} else if (this.keybindings.matches(data, "tui.select.down") || data === "j") {
-				this.descriptionScrollOffset = Math.min(maxOffset, this.descriptionScrollOffset + 1);
-			} else if (matchesKey(data, "ctrl+u")) {
-				this.descriptionScrollOffset = Math.max(0, this.descriptionScrollOffset - halfPage);
-			} else if (matchesKey(data, "ctrl+d")) {
-				this.descriptionScrollOffset = Math.min(maxOffset, this.descriptionScrollOffset + halfPage);
-			} else {
-				return;
-			}
-			this.requestRender();
-			return;
-		}
-		if (data === "d") {
+		const maxDescriptionOffset = Math.max(0, this.descriptionLines.length - this.detailsCapacity);
+		if (matchesKey(data, "shift+up") || matchesKey(data, "shift+k")) {
 			this.awaitingG = false;
-			this.detailsOpen = true;
-			this.descriptionScrollOffset = 0;
+			this.descriptionScrollOffset = Math.max(0, this.descriptionScrollOffset - 1);
+			this.requestRender();
+			return;
+		}
+		if (matchesKey(data, "shift+down") || matchesKey(data, "shift+j")) {
+			this.awaitingG = false;
+			this.descriptionScrollOffset = Math.min(maxDescriptionOffset, this.descriptionScrollOffset + 1);
 			this.requestRender();
 			return;
 		}
@@ -807,25 +796,19 @@ export class TaskBrowserComponent {
 		}
 
 		const viewportHeight = Math.max(4, Math.floor(this.getViewportHeight()));
-		const showDetailsDivider = this.detailsOpen && viewportHeight >= 5;
-		const showDetailsFooter = this.detailsOpen && viewportHeight >= 6;
-		if (this.detailsOpen) {
-			const selectedTask = selectedIndex >= 0 ? tasks[selectedIndex] : undefined;
-			const description = selectedTask?.description?.trim() || "No description";
-			this.descriptionLines = wrapDescription(description, Math.max(1, width - 4));
-			const chromeRows = 2 + Number(showDetailsDivider) + Number(showDetailsFooter);
-			const availableContentRows = Math.max(2, viewportHeight - chromeRows);
-			this.detailsCapacity = Math.max(1, Math.min(
-				this.descriptionLines.length,
-				Math.max(1, Math.floor(viewportHeight * MAX_BROWSER_DETAILS_RATIO)),
-				availableContentRows - 1,
-			));
-			this.listCapacity = Math.max(1, availableContentRows - this.detailsCapacity);
-		} else {
-			this.descriptionLines = [];
-			this.detailsCapacity = 1;
-			this.listCapacity = Math.max(1, viewportHeight - 3);
-		}
+		const showDetailsDivider = viewportHeight >= 5;
+		const showDetailsFooter = viewportHeight >= 6;
+		const selectedTask = selectedIndex >= 0 ? tasks[selectedIndex] : undefined;
+		const description = selectedTask?.description?.trim() || "No description";
+		this.descriptionLines = wrapDescription(description, Math.max(1, width - 4));
+		const chromeRows = 2 + Number(showDetailsDivider) + Number(showDetailsFooter);
+		const availableContentRows = Math.max(2, viewportHeight - chromeRows);
+		this.detailsCapacity = Math.max(1, Math.min(
+			this.descriptionLines.length,
+			Math.max(1, Math.floor(viewportHeight * MAX_BROWSER_DETAILS_RATIO)),
+			availableContentRows - 1,
+		));
+		this.listCapacity = Math.max(1, availableContentRows - this.detailsCapacity);
 
 		if (selectedIndex < this.scrollOffset) this.scrollOffset = selectedIndex;
 		if (selectedIndex >= this.scrollOffset + this.listCapacity) this.scrollOffset = selectedIndex - this.listCapacity + 1;
@@ -836,9 +819,7 @@ export class TaskBrowserComponent {
 		);
 
 		const position = selectedIndex >= 0 ? `${selectedIndex + 1}/${tasks.length}` : "0/0";
-		const title = ` ${this.theme.fg("accent", "[ Tasks ]")} ${this.theme.fg("dim", `[ Inbox · ${state.inbox.length} ]`)} · ${position} `;
-		const topFill = Math.max(0, width - visibleWidth(title) - 2);
-		const lines = [this.theme.fg("borderAccent", `╭${title}${"─".repeat(topFill)}╮`)];
+		const lines = [browserHeader("tasks", state.inbox.length, position, width, this.theme)];
 
 		if (!tasks.length) {
 			lines.push(framedRow(this.theme.fg("muted", "No projected tasks"), width, this.theme));
@@ -857,28 +838,20 @@ export class TaskBrowserComponent {
 			}
 		}
 
-		if (this.detailsOpen) {
-			const rangeStart = this.descriptionScrollOffset + 1;
-			const rangeEnd = Math.min(this.descriptionLines.length, this.descriptionScrollOffset + this.detailsCapacity);
-			if (showDetailsDivider) lines.push(divider(`details · ${rangeStart}–${rangeEnd}/${this.descriptionLines.length}`, width, this.theme));
-			for (const line of this.descriptionLines.slice(this.descriptionScrollOffset, this.descriptionScrollOffset + this.detailsCapacity)) {
-				lines.push(framedRow(this.theme.fg("dim", line), width, this.theme));
-			}
-			if (showDetailsFooter) {
-				lines.push(framedRow(
-					this.theme.fg("dim", "d/Esc close · ↑↓/jk scroll · Ctrl-U/D half-page · q sidebar · Alt-U off"),
-					width,
-					this.theme,
-				));
-			}
-		} else {
+		const rangeStart = this.descriptionScrollOffset + 1;
+		const rangeEnd = Math.min(this.descriptionLines.length, this.descriptionScrollOffset + this.detailsCapacity);
+		if (showDetailsDivider) lines.push(divider(`details · ${rangeStart}–${rangeEnd}/${this.descriptionLines.length}`, width, this.theme));
+		for (const line of this.descriptionLines.slice(this.descriptionScrollOffset, this.descriptionScrollOffset + this.detailsCapacity)) {
+			lines.push(framedRow(this.theme.fg("dim", line), width, this.theme));
+		}
+		if (showDetailsFooter) {
 			lines.push(framedRow(
-				this.theme.fg("dim", "Tab switch · ↑↓/jk move · Ctrl-U/D half-page · gg/gG jump · d details · Esc/q sidebar · Alt-U off"),
+				this.theme.fg("dim", "Tab switch · ↑↓/jk move · Shift+↑↓/JK details · Ctrl-U/D half-page · gg/gG jump · Esc/q sidebar · Alt-U off"),
 				width,
 				this.theme,
 			));
 		}
-		lines.push(this.theme.fg("borderAccent", `╰${"─".repeat(Math.max(0, width - 2))}╯`));
+		lines.push(this.theme.fg("borderMuted", `╰${"─".repeat(Math.max(0, width - 2))}╯`));
 		return lines.map((line) => truncateToWidth(line, width, ""));
 	}
 
@@ -892,29 +865,23 @@ export class TaskBrowserComponent {
 			this.descriptionScrollOffset = 0;
 		}
 		const viewportHeight = Math.max(4, Math.floor(this.getViewportHeight()));
-		const showDetailsDivider = this.detailsOpen && viewportHeight >= 5;
-		const showDetailsFooter = this.detailsOpen && viewportHeight >= 6;
-		if (this.detailsOpen) {
-			const selectedEntry = selectedIndex >= 0 ? entries[selectedIndex] : undefined;
-			this.descriptionLines = new Markdown(
-				selectedEntry?.markdown ?? "No Inbox entry",
-				0,
-				0,
-				markdownThemeFor(this.theme),
-			).render(Math.max(1, width - 4));
-			const chromeRows = 2 + Number(showDetailsDivider) + Number(showDetailsFooter);
-			const availableContentRows = Math.max(2, viewportHeight - chromeRows);
-			this.detailsCapacity = Math.max(1, Math.min(
-				this.descriptionLines.length,
-				Math.max(1, Math.floor(viewportHeight * MAX_BROWSER_DETAILS_RATIO)),
-				availableContentRows - 1,
-			));
-			this.listCapacity = Math.max(1, availableContentRows - this.detailsCapacity);
-		} else {
-			this.descriptionLines = [];
-			this.detailsCapacity = 1;
-			this.listCapacity = Math.max(1, viewportHeight - 3);
-		}
+		const showDetailsDivider = viewportHeight >= 5;
+		const showDetailsFooter = viewportHeight >= 6;
+		const selectedEntry = selectedIndex >= 0 ? entries[selectedIndex] : undefined;
+		this.descriptionLines = new Markdown(
+			selectedEntry?.markdown ?? "No Inbox entry",
+			0,
+			0,
+			markdownThemeFor(this.theme),
+		).render(Math.max(1, width - 4));
+		const chromeRows = 2 + Number(showDetailsDivider) + Number(showDetailsFooter);
+		const availableContentRows = Math.max(2, viewportHeight - chromeRows);
+		this.detailsCapacity = Math.max(1, Math.min(
+			this.descriptionLines.length,
+			Math.max(1, Math.floor(viewportHeight * MAX_BROWSER_DETAILS_RATIO)),
+			availableContentRows - 1,
+		));
+		this.listCapacity = Math.max(1, availableContentRows - this.detailsCapacity);
 
 		if (selectedIndex < this.inboxScrollOffset) this.inboxScrollOffset = selectedIndex;
 		if (selectedIndex >= this.inboxScrollOffset + this.listCapacity) this.inboxScrollOffset = selectedIndex - this.listCapacity + 1;
@@ -925,9 +892,7 @@ export class TaskBrowserComponent {
 		);
 
 		const position = selectedIndex >= 0 ? `${selectedIndex + 1}/${entries.length}` : "0/0";
-		const title = ` ${this.theme.fg("dim", "[ Tasks ]")} ${this.theme.fg("accent", `[ Inbox · ${entries.length} ]`)} · ${position} `;
-		const topFill = Math.max(0, width - visibleWidth(title) - 2);
-		const lines = [this.theme.fg("borderAccent", `╭${title}${"─".repeat(topFill)}╮`)];
+		const lines = [browserHeader("inbox", entries.length, position, width, this.theme)];
 		if (!entries.length) {
 			lines.push(framedRow(this.theme.fg("muted", "No Inbox entries"), width, this.theme));
 		} else {
@@ -945,28 +910,20 @@ export class TaskBrowserComponent {
 				lines.push(framedRow(`${prefix}${label}${task} ${preview}`, width, this.theme));
 			}
 		}
-		if (this.detailsOpen) {
-			const rangeStart = this.descriptionScrollOffset + 1;
-			const rangeEnd = Math.min(this.descriptionLines.length, this.descriptionScrollOffset + this.detailsCapacity);
-			if (showDetailsDivider) lines.push(divider(`details · ${rangeStart}–${rangeEnd}/${this.descriptionLines.length}`, width, this.theme));
-			for (const line of this.descriptionLines.slice(this.descriptionScrollOffset, this.descriptionScrollOffset + this.detailsCapacity)) {
-				lines.push(framedRow(line, width, this.theme));
-			}
-			if (showDetailsFooter) {
-				lines.push(framedRow(
-					this.theme.fg("dim", "d/Esc close · ↑↓/jk scroll · Ctrl-U/D half-page · q sidebar · Alt-U off"),
-					width,
-					this.theme,
-				));
-			}
-		} else {
+		const rangeStart = this.descriptionScrollOffset + 1;
+		const rangeEnd = Math.min(this.descriptionLines.length, this.descriptionScrollOffset + this.detailsCapacity);
+		if (showDetailsDivider) lines.push(divider(`details · ${rangeStart}–${rangeEnd}/${this.descriptionLines.length}`, width, this.theme));
+		for (const line of this.descriptionLines.slice(this.descriptionScrollOffset, this.descriptionScrollOffset + this.detailsCapacity)) {
+			lines.push(framedRow(line, width, this.theme));
+		}
+		if (showDetailsFooter) {
 			lines.push(framedRow(
-				this.theme.fg("dim", "Tab switch · ↑↓/jk move · Ctrl-U/D half-page · gg/gG jump · d details · Esc/q sidebar · Alt-U off"),
+				this.theme.fg("dim", "Tab switch · ↑↓/jk move · Shift+↑↓/JK details · Ctrl-U/D half-page · gg/gG jump · Esc/q sidebar · Alt-U off"),
 				width,
 				this.theme,
 			));
 		}
-		lines.push(this.theme.fg("borderAccent", `╰${"─".repeat(Math.max(0, width - 2))}╯`));
+		lines.push(this.theme.fg("borderMuted", `╰${"─".repeat(Math.max(0, width - 2))}╯`));
 		return lines.map((line) => truncateToWidth(line, width, ""));
 	}
 

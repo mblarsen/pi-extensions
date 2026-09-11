@@ -14,7 +14,7 @@
     "markdown.ts",
     "README.md",
     "assets",
-    "skill"
+    "skills"
   ],
   "repository": {
     "type": "git",
@@ -29,7 +29,7 @@
       "./index.ts"
     ],
     "skills": [
-      "./skill/SKILL.md"
+      "./skills/task-ui/SKILL.md"
     ]
   },
   "peerDependencies": {

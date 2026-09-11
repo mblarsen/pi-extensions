@@ -17,7 +17,7 @@ Modify these files:
 - `packages/task-ui/index.ts`
 - `packages/task-ui/index.test.ts`
 - `packages/task-ui/README.md`
-- `packages/task-ui/skill/SKILL.md`
+- `packages/task-ui/skills/task-ui/SKILL.md`
 
 Add this file:
 
@@ -201,7 +201,7 @@ Document:
 
 ### Agent Skill
 
-Update `packages/task-ui/skill/SKILL.md`.
+Update `packages/task-ui/skills/task-ui/SKILL.md`.
 
 Tell agents to add concise descriptions when context will help the user or a later agent turn. State that descriptions supplement subjects and must not duplicate them.
 

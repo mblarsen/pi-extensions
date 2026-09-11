@@ -302,7 +302,7 @@ Expected: pass.
 
 **Files**
 
-- Modify: `packages/task-ui/skill/SKILL.md`
+- Modify: `packages/task-ui/skills/task-ui/SKILL.md`
 - Modify: `packages/task-ui/README.md`
 - Create: `.changeset/task-ui-inbox.md`
 
@@ -367,7 +367,7 @@ Expected:
 
 - typecheck passes;
 - all tests pass;
-- `pack:check` includes `index.ts`, `core.ts`, `markdown.ts`, `README.md`, `assets`, and `skill/SKILL.md` for `@mblarsen/pi-task-ui`;
+- `pack:check` includes `index.ts`, `core.ts`, `markdown.ts`, `README.md`, `assets`, and `skills/task-ui/SKILL.md` for `@mblarsen/pi-task-ui`;
 - package tests are excluded from the packed files;
 - Changesets reports one minor bump for `@mblarsen/pi-task-ui`.
 
