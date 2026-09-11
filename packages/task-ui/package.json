@@ -1,6 +1,6 @@
 {
   "name": "@mblarsen/pi-task-ui",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "description": "Backend-neutral task sidebar and agent tools for Pi.",
   "license": "MIT",
   "type": "module",

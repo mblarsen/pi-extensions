@@ -1,5 +1,15 @@
 # @mblarsen/pi-task-ui
 
+## 2.4.0
+
+### Minor Changes
+
+- ef56aef: Always show details for the selected browser item, keep standard navigation focused on the item list, and add Shift+Arrow and Shift+J/K detail scrolling. Also keep browser borders muted across styled title fragments and expose the bundled skill from a matching `task-ui` directory.
+
+### Patch Changes
+
+- d066e28: Clarify that the Inbox is only for important user attention items, not agent coordination or decisions the user already made.
+
 ## 2.3.1
 
 ### Patch Changes
