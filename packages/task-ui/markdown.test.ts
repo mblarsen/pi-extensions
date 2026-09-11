@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
-import { createInitialTaskUiState, createTasks } from "./core.ts";
+import { addInboxEntry, createInitialTaskUiState, createTasks } from "./core.ts";
 import { renderTaskUiMarkdown, writeTaskUiMarkdown } from "./markdown.ts";
 
 const NOW = "2026-09-10T10:00:00.000Z";
@@ -11,6 +11,36 @@ const NOW = "2026-09-10T10:00:00.000Z";
 describe("task-ui Markdown renderer", () => {
 	test("renders an empty projection", () => {
 		assert.equal(renderTaskUiMarkdown(createInitialTaskUiState()), "_No projected tasks._");
+	});
+
+	test("renders an Inbox-only projection with complete Markdown summaries", () => {
+		let state = addInboxEntry(createInitialTaskUiState(), {
+			kind: "info",
+			markdown: "Worker finished **three checks**.",
+		}, NOW).state;
+		state = addInboxEntry(state, {
+			kind: "feedback_needed",
+			markdown: "## Choose a scope\n\n- Smaller\n- Original",
+		}, "2026-09-10T10:01:00.000Z").state;
+
+		assert.equal(renderTaskUiMarkdown(state), `_No projected tasks._
+
+# Inbox
+
+## Feedback needed · \`inbox-2\`
+
+**Created:** 2026-09-10T10:01:00.000Z
+
+## Choose a scope
+
+- Smaller
+- Original
+
+## Info · \`inbox-1\`
+
+**Created:** 2026-09-10T10:00:00.000Z
+
+Worker finished **three checks**.`);
 	});
 
 	test("writes to a unique file in the system temporary directory by default", async () => {

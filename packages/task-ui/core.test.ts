@@ -1,17 +1,26 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+	MAX_FEEDBACK_INBOX_ENTRIES,
+	MAX_INFO_INBOX_ENTRIES,
+	MAX_INBOX_MARKDOWN_CHARS,
 	MAX_TASK_OUTPUT_CHARS,
 	MAX_TASK_OUTPUT_ENTRIES,
+	addInboxEntry,
 	appendTaskOutput,
+	clearInfoInboxEntries,
+	cloneTaskUiState,
 	createInitialTaskUiState,
 	createTask,
 	createTasks,
+	getInboxCounts,
 	getTaskDashboard,
 	getTaskDisplayNumber,
+	listInboxEntries,
 	normalizeStoredTaskUiState,
 	normalizeTaskStatus,
 	removeTask,
+	resolveInboxEntry,
 	replaceExternalTasks,
 	updateTask,
 } from "./core.ts";
@@ -20,6 +29,121 @@ const NOW = "2026-07-22T10:00:00.000Z";
 const LATER = "2026-07-22T10:01:00.000Z";
 
 describe("task-ui projection", () => {
+	test("initializes and restores an empty Inbox", () => {
+		const initial = createInitialTaskUiState();
+		assert.deepEqual(initial.inbox, []);
+		assert.equal(initial.nextInboxId, 1);
+
+		const restored = normalizeStoredTaskUiState({
+			version: 5,
+			tasks: [],
+			nextId: 4,
+			nextNumber: 7,
+		});
+		assert.deepEqual(restored?.inbox, []);
+		assert.equal(restored?.nextInboxId, 1);
+	});
+
+	test("adds Inbox entries and orders feedback before info newest-first", () => {
+		let state = addInboxEntry(createInitialTaskUiState(), {
+			kind: "info",
+			markdown: "First update",
+		}, NOW).state;
+		state = addInboxEntry(state, {
+			kind: "feedback_needed",
+			markdown: "**Choose** a scope.",
+		}, LATER).state;
+		state = addInboxEntry(state, {
+			kind: "info",
+			markdown: "Latest update",
+		}, "2026-07-22T10:02:00.000Z").state;
+
+		assert.deepEqual(listInboxEntries(state).map((entry) => entry.id), ["inbox-2", "inbox-3", "inbox-1"]);
+		assert.deepEqual(listInboxEntries(state, { kind: "info" }).map((entry) => entry.markdown), ["Latest update", "First update"]);
+		assert.equal(state.nextInboxId, 4);
+	});
+
+	test("retains only the newest informational Inbox entries", () => {
+		let state = createInitialTaskUiState();
+		let evictedInfoIds: string[] = [];
+		for (let index = 0; index <= MAX_INFO_INBOX_ENTRIES; index++) {
+			const result = addInboxEntry(state, { kind: "info", markdown: `Update ${index}` }, `2026-07-22T10:${String(index).padStart(2, "0")}:00.000Z`);
+			state = result.state;
+			evictedInfoIds = result.evictedInfoIds;
+		}
+
+		assert.deepEqual(evictedInfoIds, ["inbox-1"]);
+		assert.equal(state.inbox.length, MAX_INFO_INBOX_ENTRIES);
+		assert.equal(state.inbox.some((entry) => entry.id === "inbox-1"), false);
+		assert.equal(state.nextInboxId, MAX_INFO_INBOX_ENTRIES + 2);
+	});
+
+	test("rejects feedback above the unresolved limit without mutation", () => {
+		let state = createInitialTaskUiState();
+		for (let index = 0; index < MAX_FEEDBACK_INBOX_ENTRIES; index++) {
+			state = addInboxEntry(state, { kind: "feedback_needed", markdown: `Question ${index}` }, NOW).state;
+		}
+		const before = structuredClone(state);
+
+		assert.throws(
+			() => addInboxEntry(state, { kind: "feedback_needed", markdown: "One too many" }, LATER),
+			/list entries.*resolve obsolete or duplicate entries.*preserve every entry.*prioritize.*retry/is,
+		);
+		assert.deepEqual(state, before);
+	});
+
+	test("resolves feedback entries but rejects informational entries", () => {
+		let state = addInboxEntry(createInitialTaskUiState(), { kind: "info", markdown: "FYI" }, NOW).state;
+		state = addInboxEntry(state, { kind: "feedback_needed", markdown: "Choose one" }, LATER).state;
+
+		const result = resolveInboxEntry(state, "inbox-2");
+		assert.equal(result.resolvedEntry.markdown, "Choose one");
+		assert.deepEqual(result.state.inbox.map((entry) => entry.id), ["inbox-1"]);
+		assert.throws(() => resolveInboxEntry(result.state, "inbox-1"), /Only feedback-needed Inbox entries can be resolved/);
+		assert.throws(() => resolveInboxEntry(result.state, "missing"), /Inbox entry not found: missing/);
+	});
+
+	test("clears informational entries while preserving feedback and counts", () => {
+		let state = addInboxEntry(createInitialTaskUiState(), { kind: "info", markdown: "FYI" }, NOW).state;
+		state = addInboxEntry(state, { kind: "feedback_needed", markdown: "Choose one" }, LATER).state;
+
+		assert.deepEqual(getInboxCounts(state), { info: 1, feedbackNeeded: 1, total: 2 });
+		const result = clearInfoInboxEntries(state);
+		assert.equal(result.removedCount, 1);
+		assert.deepEqual(result.state.inbox.map((entry) => entry.id), ["inbox-2"]);
+		assert.deepEqual(getInboxCounts(result.state), { info: 0, feedbackNeeded: 1, total: 1 });
+	});
+
+	test("validates Inbox summaries and optional task links", () => {
+		const state = createTask(createInitialTaskUiState(), { id: "linked", subject: "Linked" }, NOW).state;
+		assert.throws(() => addInboxEntry(state, { kind: "info", markdown: "   " }, LATER), /Inbox summary is required/);
+		assert.throws(
+			() => addInboxEntry(state, { kind: "info", markdown: "x".repeat(MAX_INBOX_MARKDOWN_CHARS + 1) }, LATER),
+			/400 source characters/,
+		);
+		assert.throws(() => addInboxEntry(state, { kind: "info", markdown: "Missing", taskId: "missing" }, LATER), /Task not found: missing/);
+
+		const added = addInboxEntry(state, { kind: "info", markdown: "  Linked summary  ", taskId: "linked" }, LATER);
+		assert.equal(added.entry.markdown, "Linked summary");
+		assert.equal(added.entry.taskId, "linked");
+		assert.deepEqual(removeTask(added.state, "linked").inbox, [added.entry]);
+	});
+
+	test("restores and clones persisted Inbox entries without reusing IDs", () => {
+		const stored = {
+			...createInitialTaskUiState(),
+			inbox: [{ id: "inbox-4", kind: "feedback_needed" as const, markdown: "Choose", createdAt: NOW }],
+			nextInboxId: 5,
+		};
+		const restored = normalizeStoredTaskUiState(stored)!;
+		const cloned = cloneTaskUiState(restored);
+		cloned.inbox[0].markdown = "Changed";
+
+		assert.equal(restored.inbox[0].markdown, "Choose");
+		assert.equal(restored.nextInboxId, 5);
+		assert.equal(addInboxEntry(restored, { kind: "info", markdown: "Next" }, LATER).entry.id, "inbox-5");
+	});
+
 	test("creates backend-addressable tasks without starting work", () => {
 		const result = createTask(createInitialTaskUiState(), {
 			id: "backend-42",

@@ -2,7 +2,7 @@
 
 A backend-neutral task sidebar for Pi.
 
-![Task sidebar showing executing and completed work](assets/task-ui.png)
+![Task sidebar showing tasks and Inbox entries](assets/task-ui.jpg)
 
 `task-ui` is deliberately presentation-only:
 
@@ -29,20 +29,31 @@ Use a target command to open or hide a view directly:
 ```text
 /task-ui sidebar
 /task-ui browse
+/task-ui inbox
 /task-ui hide
 ```
 
 You can also open the read-only task browser with `Alt+Shift+U`.
 
-The browser uses most of the terminal and shows all projected tasks in stable hierarchy and number order, including terminal history. It starts on the focused task and scrolls as you move through the complete list. Use `↑`/`↓` or `j`/`k` to move, `Ctrl-U`/`Ctrl-D` to move by half a viewport, and `gg`/`gG` to jump to the first or last task.
+The browser uses most of the terminal. It has `Tasks` and `Inbox` tabs. Press `Tab` to switch between them. `/task-ui inbox` opens the Inbox tab directly.
 
-Press `d` to open the selected task description in a details pane. The list scrolls when necessary so that the selected task stays visible. The pane shows `No description` when the task has no description. Use `↑`/`↓` or `j`/`k` to scroll long descriptions and `Ctrl-U`/`Ctrl-D` to scroll by half a pane. Press `d` or `Esc` to close the pane.
+The Tasks tab shows all projected tasks in stable hierarchy and number order, including terminal history. It starts on the focused task and scrolls through the complete list.
+
+The Inbox tab shows all retained informational entries and unresolved feedback. It puts feedback first and sorts each kind newest-first.
+
+Use `↑`/`↓` or `j`/`k` to move. Use `Ctrl-U`/`Ctrl-D` to move by half a viewport. Use `gg`/`gG` to jump to the first or last item.
+
+Press `d` to open details for the selected item. Task details show the complete task description. Inbox details render the complete stored Markdown summary. Use `↑`/`↓` or `j`/`k` to scroll details. Use `Ctrl-U`/`Ctrl-D` to scroll by half a pane. Press `d` or `Esc` to close the pane.
 
 Press `Esc` or `q` to return to the sidebar when the details pane is closed. Press `q` from the details pane to return directly. Press `Alt+U` in browse mode to hide both views. Browse mode does not change the task projection.
 
 The bar hides responsively below 72 terminal columns. Its `Tasks` panel shows numbered work, nested subtasks, blockers, terminal history, optional right-aligned labels, and projected execution telemetry without a summary or progress bar. Subtasks use stable hierarchical labels such as `#2.1` and `#2.1.1` and render immediately beneath their parent in subtask order. Active and pending work share one stable list capped at the first seven items, so the earliest work retains priority; overflow is summarized as `… and N more`. `history` shows the latest three terminal transitions newest-first and does not reorder them after metadata or output edits. When only history remains, a muted `All done!` message appears above it.
 
 A separate untitled box below the `Tasks` panel shows descriptions for executing `in_progress` tasks. It skips tasks without descriptions, selects at most three tasks in depth-first display order, and shows at most three lines for each description. The box, text, and dividers use dim theme colors. The box hides when no description qualifies or when the terminal cannot show it without clipping the main panel.
+
+The `Inbox` panel appears below task descriptions. It can appear when the task list is empty. It shows at most three stacked entries with fixed `Feedback needed` or `Info` labels. Each entry can show a linked task number and two Markdown preview lines. An overflow count covers entries that do not fit.
+
+The sidebar reserves space in this order: feedback entries, active task descriptions, then informational entries. The visual order remains task descriptions before the Inbox.
 
 | Icon | Meaning |
 |---|---|
@@ -70,8 +81,9 @@ Parents are independently executable. Their status and progress are not derived 
 | `task_ui_get` | Read one task; without `task_id`, return active, next, and focused tasks |
 | `task_ui_update` | Update the label, status, blockers, focus-driving state, progress, and execution telemetry |
 | `task_ui_output` | Append, read, or clear projected output |
+| `task_ui_inbox` | Add, resolve, list, or clear user-facing Inbox summaries |
 | `task_ui_remove` | Remove one projected task and detach its children as root tasks |
-| `task_ui_clear` | Clear the entire projection |
+| `task_ui_clear` | Clear all projected tasks while preserving Inbox entries |
 | `task_ui_stop` | Move a task to stopped history, stop its spinner, and advance focus |
 
 `task_ui_remove`, `task_ui_clear`, and `task_ui_stop` do not modify backend work. The agent must perform matching backend actions separately when needed.
@@ -97,6 +109,42 @@ task_ui_list({ status: "failed" });
 
 Providing both selectors or neither selector is invalid.
 
+### Using the Inbox
+
+`task_ui_inbox` is presentation-only. It never replaces the normal user-facing response. The agent must send the complete response as usual and also call this tool when an Inbox entry applies.
+
+Use `info` for a concise, self-contained takeaway. Use `feedback_needed` for the exact question or decision that needs a user response. Each stored Markdown summary has a 400-character source limit. An optional `task_id` links the entry to a projected task.
+
+```ts
+task_ui_inbox({
+  operation: "add",
+  kind: "info",
+  markdown: "The import requires a separate session for each active cursor.",
+  task_id: "imports",
+});
+
+task_ui_inbox({
+  operation: "add",
+  kind: "feedback_needed",
+  markdown: "Should the export include archived records?",
+  task_id: "export",
+});
+```
+
+Informational entries use a rolling limit of 10. Unresolved feedback does not roll off. The tool accepts at most 20 unresolved feedback entries. It rejects entry 21 and asks the agent to clean obsolete or duplicate entries.
+
+After the user answers, the agent resolves the feedback entry. Resolution removes it immediately.
+
+```ts
+task_ui_inbox({ operation: "resolve", entry_id: "inbox-3" });
+```
+
+Use `operation: "list"` with an optional `kind` to read entries. Use `operation: "clear"` to remove informational entries only. Clear never removes unresolved feedback.
+
+Each operation returns Inbox counts, `suggestedNextTask`, and `suggestedAction`. Add also returns the entry and evicted informational IDs. List returns entries and its selector. Resolve returns the removed entry and the next feedback entry. Clear returns the removed count.
+
+Do not add routine acknowledgments, internal worker messages, duplicate requests, ordinary progress updates, or terminal completion summaries.
+
 ### Exporting Markdown
 
 Call `task_ui_to_md` without parameters to write the complete projection to a unique file in the system temporary directory:
@@ -115,6 +163,8 @@ The extension creates the Markdown. The file contains numbered task headings, de
 
 The heading level shows the task hierarchy. The tool includes all task statuses in stable hierarchy and number order.
 
+The export also includes complete Inbox summaries. Each entry includes its ID, kind, creation time, and optional linked task ID.
+
 The tool returns the absolute file path. Parent directories must already exist.
 
 The tool will not replace an existing file by default. After the user confirms replacement, call it again with `overwrite: true`:
@@ -130,7 +180,7 @@ Tool results can include two independent forms of guidance:
 - `suggestedNextTask` contains the next unblocked pending task when relevant. `null` means that none is ready; omission means that the result does not make a next-task recommendation.
 - `suggestedAction` contains a textual example of a sensible later `task_ui_*` call.
 
-Other structured result additions include list selectors and status counts, created IDs, changed fields, newly ready tasks, unresolved blockers, output counts, detached children, removed counts, and recorded stop reasons.
+Other structured result additions include list selectors and status counts, created IDs, changed fields, newly ready tasks, unresolved blockers, Inbox entries and counts, output counts, detached children, removed counts, and recorded stop reasons.
 
 For example:
 

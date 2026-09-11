@@ -1,13 +1,19 @@
-export const TASK_UI_STATE_VERSION = 5 as const;
+export const TASK_UI_STATE_VERSION = 6 as const;
 
 export const TASK_STATUSES = ["pending", "in_progress", "completed", "failed", "stopped"] as const;
 export const TASK_LIST_SCOPES = ["all", "open", "ready", "active", "history"] as const;
+export const INBOX_ENTRY_KINDS = ["info", "feedback_needed"] as const;
+export const MAX_INBOX_MARKDOWN_CHARS = 400;
+export const MAX_INFO_INBOX_ENTRIES = 10;
+export const MAX_FEEDBACK_INBOX_ENTRIES = 20;
 export const MAX_TASK_OUTPUT_CHARS = 2_000;
 export const MAX_TASK_OUTPUT_ENTRIES = 100;
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskListScope = (typeof TASK_LIST_SCOPES)[number];
 export type TaskListSelector = { scope: TaskListScope } | { status: TaskStatus };
+export type InboxEntryKind = (typeof INBOX_ENTRY_KINDS)[number];
+export type InboxListSelector = { kind?: InboxEntryKind };
 
 export interface TaskOutputEntry {
 	text: string;
@@ -37,12 +43,34 @@ export interface TaskRecord {
 	output: TaskOutputEntry[];
 }
 
+export interface InboxEntry {
+	id: string;
+	kind: InboxEntryKind;
+	markdown: string;
+	taskId?: string;
+	createdAt: string;
+}
+
+export interface AddInboxEntryInput {
+	kind: InboxEntryKind;
+	markdown: string;
+	taskId?: string;
+}
+
+export interface InboxCounts {
+	info: number;
+	feedbackNeeded: number;
+	total: number;
+}
+
 export interface TaskUiState {
 	version: typeof TASK_UI_STATE_VERSION;
 	tasks: TaskRecord[];
+	inbox: InboxEntry[];
 	focusedTaskId?: string;
 	nextId: number;
 	nextNumber: number;
+	nextInboxId: number;
 }
 
 export interface CreateTaskInput {
@@ -113,7 +141,7 @@ export interface TaskDashboard {
 }
 
 export function createInitialTaskUiState(): TaskUiState {
-	return { version: TASK_UI_STATE_VERSION, tasks: [], nextId: 1, nextNumber: 1 };
+	return { version: TASK_UI_STATE_VERSION, tasks: [], inbox: [], nextId: 1, nextNumber: 1, nextInboxId: 1 };
 }
 
 function clampProgress(progress: number | undefined): number | undefined {
@@ -154,7 +182,7 @@ function cloneTask(task: TaskRecord): TaskRecord {
 }
 
 export function cloneTaskUiState(state: TaskUiState): TaskUiState {
-	return { ...state, tasks: state.tasks.map(cloneTask) };
+	return { ...state, tasks: state.tasks.map(cloneTask), inbox: state.inbox.map((entry) => ({ ...entry })) };
 }
 
 export function normalizeTaskStatus(status: string | undefined): TaskStatus {
@@ -347,6 +375,97 @@ export function getTaskDashboard(state: TaskUiState): TaskDashboard {
 	};
 }
 
+function cloneInboxEntry(entry: InboxEntry): InboxEntry {
+	return { ...entry };
+}
+
+export function listInboxEntries(state: TaskUiState, selector: InboxListSelector = {}): InboxEntry[] {
+	return state.inbox
+		.filter((entry) => selector.kind === undefined || entry.kind === selector.kind)
+		.map(cloneInboxEntry)
+		.sort((left, right) => {
+			if (left.kind !== right.kind) return left.kind === "feedback_needed" ? -1 : 1;
+			const byCreatedAt = right.createdAt.localeCompare(left.createdAt);
+			if (byCreatedAt !== 0) return byCreatedAt;
+			return right.id.localeCompare(left.id, undefined, { numeric: true });
+		});
+}
+
+export function addInboxEntry(
+	state: TaskUiState,
+	input: AddInboxEntryInput,
+	now = new Date().toISOString(),
+): { state: TaskUiState; entry: InboxEntry; evictedInfoIds: string[] } {
+	const markdown = input.markdown.trim();
+	if (!markdown) throw new Error("Inbox summary is required");
+	if (markdown.length > MAX_INBOX_MARKDOWN_CHARS) {
+		throw new Error(`Inbox summary cannot exceed ${MAX_INBOX_MARKDOWN_CHARS} source characters`);
+	}
+	const taskId = cleanOptional(input.taskId);
+	if (taskId && !state.tasks.some((task) => task.id === taskId)) throw new Error(`Task not found: ${taskId}`);
+	if (input.kind === "feedback_needed" && state.inbox.filter((entry) => entry.kind === "feedback_needed").length >= MAX_FEEDBACK_INBOX_ENTRIES) {
+		throw new Error(`Inbox has ${MAX_FEEDBACK_INBOX_ENTRIES} unresolved feedback entries. List entries, resolve obsolete or duplicate entries, preserve every entry that still needs a user response, prioritize the remaining requests, then retry the add operation.`);
+	}
+
+	const entry: InboxEntry = {
+		id: `inbox-${state.nextInboxId}`,
+		kind: input.kind,
+		markdown,
+		taskId,
+		createdAt: now,
+	};
+	let inbox = [...state.inbox.map(cloneInboxEntry), entry];
+	const excessInfoCount = Math.max(0, inbox.filter((item) => item.kind === "info").length - MAX_INFO_INBOX_ENTRIES);
+	const evictedInfoIds = inbox
+		.filter((item) => item.kind === "info")
+		.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id, undefined, { numeric: true }))
+		.slice(0, excessInfoCount)
+		.map((item) => item.id);
+	if (evictedInfoIds.length > 0) {
+		const evicted = new Set(evictedInfoIds);
+		inbox = inbox.filter((item) => !evicted.has(item.id));
+	}
+	return {
+		state: {
+			...cloneTaskUiState(state),
+			inbox,
+			nextInboxId: state.nextInboxId + 1,
+		},
+		entry: cloneInboxEntry(entry),
+		evictedInfoIds,
+	};
+}
+
+export function getInboxCounts(state: TaskUiState): InboxCounts {
+	const info = state.inbox.filter((entry) => entry.kind === "info").length;
+	const feedbackNeeded = state.inbox.length - info;
+	return { info, feedbackNeeded, total: state.inbox.length };
+}
+
+export function clearInfoInboxEntries(state: TaskUiState): { state: TaskUiState; removedCount: number } {
+	const inbox = state.inbox.filter((entry) => entry.kind !== "info").map(cloneInboxEntry);
+	return {
+		state: { ...cloneTaskUiState(state), inbox },
+		removedCount: state.inbox.length - inbox.length,
+	};
+}
+
+export function resolveInboxEntry(
+	state: TaskUiState,
+	entryId: string,
+): { state: TaskUiState; resolvedEntry: InboxEntry } {
+	const entry = state.inbox.find((item) => item.id === entryId);
+	if (!entry) throw new Error(`Inbox entry not found: ${entryId}`);
+	if (entry.kind !== "feedback_needed") throw new Error("Only feedback-needed Inbox entries can be resolved");
+	return {
+		state: {
+			...cloneTaskUiState(state),
+			inbox: state.inbox.filter((item) => item.id !== entryId).map(cloneInboxEntry),
+		},
+		resolvedEntry: cloneInboxEntry(entry),
+	};
+}
+
 export function createTask(
 	state: TaskUiState,
 	input: CreateTaskInput,
@@ -394,6 +513,7 @@ export function createTask(
 		: chooseFocus(tasks, state.focusedTaskId);
 	return {
 		state: {
+			...state,
 			version: TASK_UI_STATE_VERSION,
 			tasks,
 			focusedTaskId,
@@ -617,16 +737,40 @@ export function replaceExternalTasks(
 	return { ...state, focusedTaskId: chooseFocus(state.tasks, focusedTaskId) };
 }
 
+function normalizeStoredInbox(value: unknown): InboxEntry[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((candidate): InboxEntry[] => {
+		if (!candidate || typeof candidate !== "object") return [];
+		const entry = candidate as Partial<InboxEntry>;
+		const id = cleanOptional(entry.id);
+		const markdown = cleanOptional(entry.markdown);
+		const createdAt = cleanOptional(entry.createdAt);
+		if (!id || !markdown || markdown.length > MAX_INBOX_MARKDOWN_CHARS || !createdAt) return [];
+		if (entry.kind !== "info" && entry.kind !== "feedback_needed") return [];
+		return [{ id, kind: entry.kind, markdown, taskId: cleanOptional(entry.taskId), createdAt }];
+	});
+}
+
 export function normalizeStoredTaskUiState(value: unknown): TaskUiState | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const candidate = value as Partial<TaskUiState>;
 	if (!Array.isArray(candidate.tasks)) return undefined;
 	try {
 		const state = replaceExternalTasks(candidate.tasks as ExternalTaskInput[], candidate.focusedTaskId);
+		const inbox = normalizeStoredInbox(candidate.inbox);
+		const derivedNextInboxId = inbox.reduce((next, entry) => {
+			const match = /^inbox-(\d+)$/.exec(entry.id);
+			return match ? Math.max(next, Number(match[1]) + 1) : next;
+		}, 1);
+		const storedNextInboxId = typeof candidate.nextInboxId === "number" && candidate.nextInboxId > 0
+			? Math.floor(candidate.nextInboxId)
+			: 1;
 		return {
 			...state,
+			inbox,
 			nextId: typeof candidate.nextId === "number" && candidate.nextId > 0 ? Math.floor(candidate.nextId) : state.nextId,
 			nextNumber: typeof candidate.nextNumber === "number" && candidate.nextNumber > 0 ? Math.floor(candidate.nextNumber) : state.nextNumber,
+			nextInboxId: Math.max(storedNextInboxId, derivedNextInboxId),
 		};
 	} catch {
 		return undefined;

@@ -6,6 +6,7 @@ import GithubSlugger from "github-slugger";
 import {
 	getTaskDepth,
 	getTaskDisplayNumber,
+	listInboxEntries,
 	orderTasksForDisplay,
 	type TaskRecord,
 	type TaskStatus,
@@ -49,7 +50,7 @@ function prepareTasks(state: TaskUiState): PreparedTask[] {
 	});
 }
 
-export function renderTaskUiMarkdown(state: TaskUiState): string {
+function renderTasksMarkdown(state: TaskUiState): string {
 	const prepared = prepareTasks(state);
 	if (prepared.length === 0) return "_No projected tasks._";
 
@@ -69,6 +70,26 @@ export function renderTaskUiMarkdown(state: TaskUiState): string {
 			metadata.join(" · "),
 		].filter((part): part is string => part !== undefined).join("\n\n");
 	}).join("\n\n");
+}
+
+function renderInboxMarkdown(state: TaskUiState): string | undefined {
+	const entries = listInboxEntries(state);
+	if (entries.length === 0) return undefined;
+	return [
+		"# Inbox",
+		...entries.map((entry) => {
+			const label = entry.kind === "feedback_needed" ? "Feedback needed" : "Info";
+			const metadata = [`**Created:** ${entry.createdAt}`];
+			if (entry.taskId) metadata.push(`**Task:** ${inlineCode(entry.taskId)}`);
+			return [`## ${label} · ${inlineCode(entry.id)}`, metadata.join(" · "), entry.markdown].join("\n\n");
+		}),
+	].join("\n\n");
+}
+
+export function renderTaskUiMarkdown(state: TaskUiState): string {
+	return [renderTasksMarkdown(state), renderInboxMarkdown(state)]
+		.filter((part): part is string => part !== undefined)
+		.join("\n\n");
 }
 
 export interface WriteTaskUiMarkdownOptions {

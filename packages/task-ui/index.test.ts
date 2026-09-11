@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createInitialTaskUiState, createTasks, updateTask } from "./core.ts";
+import { addInboxEntry, createInitialTaskUiState, createTasks, updateTask } from "./core.ts";
 import taskUiExtension, {
 	blockerText,
 	checkpointForToolResult,
@@ -78,20 +78,145 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 		"task_ui_get",
 		"task_ui_update",
 		"task_ui_output",
+		"task_ui_inbox",
 		"task_ui_remove",
 		"task_ui_clear",
 		"task_ui_stop",
 	]);
 	assert.ok(tools.every((tool) => /projection|UI/i.test(tool.description)));
+	assert.match(tools.find((tool) => tool.name === "task_ui_inbox")!.description, /never replaces.*normal user-facing response/is);
 	assert.deepEqual(commands, ["task-ui"]);
 	assert.deepEqual(getArgumentCompletions?.("b")?.map((item) => item.value), ["browse"]);
-	assert.deepEqual(getArgumentCompletions?.("")?.map((item) => item.value), ["browse", "sidebar", "hide", "cycle"]);
+	assert.deepEqual(getArgumentCompletions?.("")?.map((item) => item.value), ["browse", "inbox", "sidebar", "hide", "cycle"]);
 	assert.deepEqual(shortcuts, ["alt+u", "alt+shift+u"]);
 	assert.deepEqual(lifecycleEvents, ["tool_result", "turn_start", "session_start", "session_tree", "session_shutdown"]);
 	assert.deepEqual(adapterEvents, Object.values(TASK_UI_EVENTS));
 	assert.equal(lifecycleEvents.includes("before_agent_start"), false);
 	assert.equal(lifecycleEvents.includes("tool_call"), false);
 	assert.equal(lifecycleEvents.includes("agent_start"), false);
+});
+
+test("adds Inbox summaries with agent-oriented results", async () => {
+	const { pi, tools } = extensionHarness();
+	taskUiExtension(pi);
+	const tool = (name: string) => tools.find((item) => item.name === name)!;
+	await tool("task_ui_create").execute("create", { id: "work", subject: "Continue work" });
+	const inbox = tool("task_ui_inbox");
+
+	const info = await inbox.execute("info", {
+		operation: "add",
+		kind: "info",
+		markdown: "Three checks passed.",
+		task_id: "work",
+	});
+	assert.equal(info.details?.action, "add");
+	assert.deepEqual(info.details?.entry, {
+		id: "inbox-1",
+		kind: "info",
+		markdown: "Three checks passed.",
+		taskId: "work",
+		createdAt: (info.details?.entry as { createdAt: string }).createdAt,
+	});
+	assert.deepEqual(info.details?.counts, { info: 1, feedbackNeeded: 0, total: 1 });
+	assert.deepEqual(info.details?.evictedInfoIds, []);
+	assert.equal((info.details?.suggestedNextTask as { id: string }).id, "work");
+	assert.match(info.details?.suggestedAction as string, /supplements the normal user-facing response.*full response.*continue the planned work/is);
+	assert.match(info.content[0].text, /supplements the normal user-facing response/i);
+
+	const feedback = await inbox.execute("feedback", {
+		operation: "add",
+		kind: "feedback_needed",
+		markdown: "Choose a scope.",
+	});
+	assert.equal((feedback.details?.entry as { id: string }).id, "inbox-2");
+	assert.deepEqual(feedback.details?.counts, { info: 1, feedbackNeeded: 1, total: 2 });
+	assert.match(feedback.details?.suggestedAction as string, /resolve.*inbox-2.*after the user answers/is);
+});
+
+test("lists, resolves, and clears Inbox entries with useful next actions", async () => {
+	const { pi, tools } = extensionHarness();
+	taskUiExtension(pi);
+	const inbox = tools.find((item) => item.name === "task_ui_inbox")!;
+	await inbox.execute("info", { operation: "add", kind: "info", markdown: "FYI" });
+	await inbox.execute("first", { operation: "add", kind: "feedback_needed", markdown: "First question" });
+	await inbox.execute("second", { operation: "add", kind: "feedback_needed", markdown: "Second question" });
+
+	const listed = await inbox.execute("list", { operation: "list" });
+	assert.deepEqual((listed.details?.entries as Array<{ id: string }>).map((entry) => entry.id), ["inbox-3", "inbox-2", "inbox-1"]);
+	assert.deepEqual(listed.details?.selector, {});
+	assert.deepEqual(listed.details?.counts, { info: 1, feedbackNeeded: 2, total: 3 });
+	assert.equal(listed.details?.suggestedNextTask, null);
+
+	const filtered = await inbox.execute("list-info", { operation: "list", kind: "info" });
+	assert.deepEqual((filtered.details?.entries as Array<{ id: string }>).map((entry) => entry.id), ["inbox-1"]);
+	assert.deepEqual(filtered.details?.selector, { kind: "info" });
+
+	const resolved = await inbox.execute("resolve", { operation: "resolve", entry_id: "inbox-3" });
+	assert.equal((resolved.details?.resolvedEntry as { id: string }).id, "inbox-3");
+	assert.equal((resolved.details?.nextFeedbackEntry as { id: string }).id, "inbox-2");
+	assert.match(resolved.details?.suggestedAction as string, /next unresolved feedback.*inbox-2/i);
+
+	const cleared = await inbox.execute("clear", { operation: "clear" });
+	assert.equal(cleared.details?.removedCount, 1);
+	assert.deepEqual(cleared.details?.counts, { info: 0, feedbackNeeded: 1, total: 1 });
+	assert.match(cleared.details?.suggestedAction as string, /feedback.*remains/i);
+
+	const final = await inbox.execute("resolve-final", { operation: "resolve", entry_id: "inbox-2" });
+	assert.equal(final.details?.nextFeedbackEntry, null);
+	assert.match(final.details?.suggestedAction as string, /No unresolved feedback remains/i);
+});
+
+test("validates task_ui_inbox operation-specific fields", async () => {
+	const { pi, tools } = extensionHarness();
+	taskUiExtension(pi);
+	const inbox = tools.find((item) => item.name === "task_ui_inbox")!;
+
+	await assert.rejects(inbox.execute("missing-kind", { operation: "add", markdown: "Summary" }), /add requires kind/);
+	await assert.rejects(inbox.execute("missing-markdown", { operation: "add", kind: "info" }), /add requires markdown/);
+	await assert.rejects(inbox.execute("extra-add", { operation: "add", kind: "info", markdown: "Summary", entry_id: "inbox-1" }), /add does not accept entry_id/);
+	await assert.rejects(inbox.execute("missing-id", { operation: "resolve" }), /resolve requires entry_id/);
+	await assert.rejects(inbox.execute("extra-resolve", { operation: "resolve", entry_id: "inbox-1", markdown: "No" }), /resolve does not accept markdown/);
+	await assert.rejects(inbox.execute("extra-list", { operation: "list", task_id: "task-1" }), /list does not accept task_id/);
+	await assert.rejects(inbox.execute("extra-clear", { operation: "clear", kind: "info" }), /clear does not accept kind/);
+});
+
+test("returns actionable guidance at the feedback limit", async () => {
+	const { pi, tools } = extensionHarness();
+	taskUiExtension(pi);
+	const inbox = tools.find((item) => item.name === "task_ui_inbox")!;
+	for (let index = 0; index < 20; index++) {
+		await inbox.execute(`feedback-${index}`, { operation: "add", kind: "feedback_needed", markdown: `Question ${index}` });
+	}
+
+	const listed = await inbox.execute("list", { operation: "list", kind: "feedback_needed" });
+	assert.match(listed.details?.suggestedAction as string, /near its limit.*resolve obsolete or duplicate.*preserve.*prioritize/is);
+	await assert.rejects(
+		inbox.execute("overflow", { operation: "add", kind: "feedback_needed", markdown: "Question 21" }),
+		/list entries.*resolve obsolete or duplicate entries.*preserve every entry.*prioritize.*retry/is,
+	);
+});
+
+test("task replacement and clearing preserve Inbox state and ID continuity", async () => {
+	const tools: RegisteredTool[] = [];
+	const adapterHandlers = new Map<string, (payload: unknown) => void>();
+	const pi = {
+		registerTool(tool: RegisteredTool) { tools.push(tool); },
+		registerCommand() {},
+		registerShortcut() {},
+		on() {},
+		events: { on(name: string, handler: (payload: unknown) => void) { adapterHandlers.set(name, handler); } },
+	} as unknown as ExtensionAPI;
+	taskUiExtension(pi);
+	const tool = (name: string) => tools.find((item) => item.name === name)!;
+
+	await tool("task_ui_inbox").execute("first", { operation: "add", kind: "info", markdown: "Keep me" });
+	adapterHandlers.get(TASK_UI_EVENTS.snapshot)?.({ tasks: [{ id: "external", subject: "External" }] });
+	assert.deepEqual((await tool("task_ui_inbox").execute("after-snapshot", { operation: "list" })).details?.counts, { info: 1, feedbackNeeded: 0, total: 1 });
+
+	await tool("task_ui_clear").execute("clear-tasks", {});
+	assert.deepEqual((await tool("task_ui_inbox").execute("after-clear", { operation: "list" })).details?.counts, { info: 1, feedbackNeeded: 0, total: 1 });
+	const second = await tool("task_ui_inbox").execute("second", { operation: "add", kind: "info", markdown: "Next" });
+	assert.equal((second.details?.entry as { id: string }).id, "inbox-2");
 });
 
 test("writes the complete projection as Markdown without changing state", async () => {
@@ -154,11 +279,19 @@ test("cycles sidebar → browse → off and supports named view commands", async
 	const { pi, tools } = extensionHarness();
 	type ShortcutHandler = (ctx: never) => Promise<void>;
 	type CommandHandler = (args: string, ctx: never) => Promise<void>;
+	type CommandOptions = {
+		handler: CommandHandler;
+		getArgumentCompletions: (prefix: string) => Array<{ value: string }> | null;
+	};
 	const shortcuts = new Map<string, ShortcutHandler>();
 	const lifecycle = new Map<string, (event: never, ctx: never) => Promise<void>>();
 	let taskUiCommand: CommandHandler | undefined;
+	let taskUiCompletions: CommandOptions["getArgumentCompletions"] | undefined;
 	pi.registerShortcut = ((key: string, options: { handler: ShortcutHandler }) => shortcuts.set(key, options.handler)) as never;
-	pi.registerCommand = ((_name: string, options: { handler: CommandHandler }) => { taskUiCommand = options.handler; }) as never;
+	pi.registerCommand = ((_name: string, options: CommandOptions) => {
+		taskUiCommand = options.handler;
+		taskUiCompletions = options.getArgumentCompletions;
+	}) as never;
 	pi.on = ((event: string, handler: (event: never, ctx: never) => Promise<void>) => lifecycle.set(event, handler)) as never;
 	taskUiExtension(pi);
 	let sidebarHidden = false;
@@ -202,6 +335,12 @@ test("cycles sidebar → browse → off and supports named view commands", async
 	pi.appendEntry = () => {};
 	await lifecycle.get("session_start")!({} as never, ctx as never);
 	await tools.find((tool) => tool.name === "task_ui_create")!.execute("test", { subject: "Task" });
+	await tools.find((tool) => tool.name === "task_ui_inbox")!.execute("inbox", {
+		operation: "add",
+		kind: "info",
+		markdown: "Inbox command entry",
+	});
+	assert.deepEqual((taskUiCompletions!("in") ?? []).map((item) => item.value), ["inbox"]);
 	const cycle = () => shortcuts.get("alt+u")!(ctx as never);
 	assert.equal(sidebarHidden, false);
 	let browsing = cycle();
@@ -239,6 +378,14 @@ test("cycles sidebar → browse → off and supports named view commands", async
 	browsing = taskUiCommand!("browse", ctx as never);
 	assert.equal(sidebarHidden, true);
 	await taskUiCommand!("sidebar", ctx as never);
+	await browsing;
+	assert.equal(sidebarHidden, false);
+
+	browsing = taskUiCommand!("inbox", ctx as never);
+	assert.equal(sidebarHidden, true);
+	assert.equal(browser!.getSelectedInboxEntryId(), "inbox-1");
+	assert.ok(browser!.render(60).some((line) => stripVTControlCharacters(line).includes("Inbox command entry")));
+	browser!.handleInput("q");
 	await browsing;
 	assert.equal(sidebarHidden, false);
 
@@ -370,6 +517,86 @@ test("renders no window when there are no tasks or history", () => {
 	assert.deepEqual(new TaskBarComponent(() => state, () => "✳", theme as never).render(60), []);
 });
 
+test("sidebar renders Inbox entries when there are no projected tasks", () => {
+	let state = addInboxEntry(createInitialTaskUiState(), {
+		kind: "info",
+		markdown: "Worker finished **three checks**.",
+	}, "2026-09-11T09:00:00.000Z").state;
+	state = addInboxEntry(state, {
+		kind: "feedback_needed",
+		markdown: "**Choose** a scope.",
+	}, "2026-09-11T09:01:00.000Z").state;
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+
+	const lines = new TaskBarComponent(() => state, () => "✳", theme as never, () => 20)
+		.render(60)
+		.map(stripVTControlCharacters);
+	assert.match(lines[0], /Inbox/);
+	assert.equal(lines.some((line) => line.includes("Tasks")), false);
+	assert.ok(lines.some((line) => line.includes("Feedback needed")));
+	assert.ok(lines.some((line) => line.includes("Choose") && line.includes("scope")));
+	assert.ok(lines.some((line) => line.includes("Info")));
+	assert.ok(lines.some((line) => line.includes("Worker finished") && line.includes("three checks")));
+});
+
+test("sidebar shows three ordered Inbox cards with task links and overflow", () => {
+	let state = createTasks(createInitialTaskUiState(), [{ id: "linked", subject: "Linked task" }]).state;
+	state = addInboxEntry(state, { kind: "info", markdown: "Old info" }, "2026-09-11T09:00:00.000Z").state;
+	state = addInboxEntry(state, { kind: "feedback_needed", markdown: "First question", taskId: "linked" }, "2026-09-11T09:01:00.000Z").state;
+	state = addInboxEntry(state, { kind: "info", markdown: "- First line\n- Second line\n- Hidden third line" }, "2026-09-11T09:02:00.000Z").state;
+	state = addInboxEntry(state, { kind: "feedback_needed", markdown: "Latest question" }, "2026-09-11T09:03:00.000Z").state;
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		italic: (text: string) => text,
+		underline: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+
+	const lines = new TaskBarComponent(() => state, () => "✳", theme as never, () => 30)
+		.render(60)
+		.map(stripVTControlCharacters);
+	const text = lines.join("\n");
+	assert.ok(text.indexOf("Latest question") < text.indexOf("First question"));
+	assert.ok(text.indexOf("First question") < text.indexOf("First line"));
+	assert.match(text, /Feedback needed #1/);
+	assert.match(text, /… and 1 more/);
+	assert.doesNotMatch(text, /Old info/);
+	assert.doesNotMatch(text, /Hidden third line/);
+});
+
+test("sidebar reserves constrained height for feedback before descriptions and info", () => {
+	let state = createTasks(createInitialTaskUiState(), [{
+		id: "work",
+		subject: "Work",
+		description: "Description first line\nDescription second line\nDescription third line",
+		executing: true,
+	}]).state;
+	state = addInboxEntry(state, { kind: "info", markdown: "Informational update" }, "2026-09-11T09:00:00.000Z").state;
+	state = addInboxEntry(state, { kind: "feedback_needed", markdown: "Decision required" }, "2026-09-11T09:01:00.000Z").state;
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		italic: (text: string) => text,
+		underline: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+
+	const lines = new TaskBarComponent(() => state, () => "✳", theme as never, () => 11)
+		.render(50)
+		.map(stripVTControlCharacters);
+	const text = lines.join("\n");
+	assert.ok(lines.length <= 11);
+	assert.match(text, /Decision required/);
+	assert.match(text, /Description first line/);
+	assert.doesNotMatch(text, /Informational update/);
+	assert.ok(text.indexOf("Description first line") < text.indexOf("Inbox"));
+});
+
 test("sidebar shows descriptions for executing tasks in depth-first order", () => {
 	const state = createTasks(createInitialTaskUiState(), [
 		{ id: "parent", subject: "Parent", description: "Parent context", executing: true },
@@ -488,6 +715,111 @@ test("browser shows every task in hierarchical number order", () => {
 	assert.ok(lines.findIndex((line) => line.includes("#1 Completed parent")) < lines.findIndex((line) => line.includes("#1.1 Pending child")));
 	assert.ok(lines.findIndex((line) => line.includes("#1.1 Pending child")) < lines.findIndex((line) => line.includes("#2 Active root")));
 	assert.match(lines.find((line) => line.includes("Pending child")) ?? "", /›/);
+});
+
+test("browser switches between Tasks and Inbox tabs", () => {
+	let state = createTasks(createInitialTaskUiState(), [{ id: "task", subject: "Task" }]).state;
+	state = addInboxEntry(state, { kind: "feedback_needed", markdown: "**Choose** a scope." }, "2026-09-11T09:00:00.000Z").state;
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		italic: (text: string) => text,
+		underline: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const browser = new TaskBrowserComponent(
+		() => state,
+		() => "✳",
+		() => 10,
+		theme as never,
+		{ matches: () => false } as never,
+		() => {},
+		() => {},
+	);
+
+	let lines = browser.render(60).map(stripVTControlCharacters);
+	assert.match(lines[0], /\[ Tasks \].*\[ Inbox · 1 \]/);
+	assert.ok(lines.some((line) => line.includes("#1 Task")));
+	browser.handleInput("\t");
+	lines = browser.render(60).map(stripVTControlCharacters);
+	assert.equal(browser.getSelectedInboxEntryId(), "inbox-1");
+	assert.ok(lines.some((line) => line.includes("Feedback needed") && line.includes("Choose")));
+	assert.equal(lines.some((line) => line.includes("#1 Task")), false);
+});
+
+test("browser renders and scrolls selected Inbox details as Markdown", () => {
+	let state = addInboxEntry(createInitialTaskUiState(), {
+		kind: "feedback_needed",
+		markdown: "# Decision\n\n- Alpha\n- Beta\n\nUse **Alpha** first.",
+	}, "2026-09-11T09:00:00.000Z").state;
+	state = addInboxEntry(state, { kind: "info", markdown: "Older info" }, "2026-09-11T08:00:00.000Z").state;
+	const styled: Array<[string, string]> = [];
+	const theme = {
+		fg: (color: string, text: string) => { styled.push([color, text]); return text; },
+		bold: (text: string) => text,
+		italic: (text: string) => text,
+		underline: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const keybindings = { matches: (data: string, binding: string) => binding === "tui.select.cancel" && data === "escape" };
+	const browser = new TaskBrowserComponent(
+		() => state,
+		() => "✳",
+		() => 9,
+		theme as never,
+		keybindings as never,
+		() => {},
+		() => {},
+		"inbox",
+	);
+
+	browser.handleInput("d");
+	let lines = browser.render(60).map(stripVTControlCharacters);
+	assert.ok(lines.some((line) => line.includes("Decision")));
+	assert.ok(lines.some((line) => line.includes("Alpha")));
+	assert.ok(lines.some((line) => line.includes("details")));
+	assert.ok(lines.some((line) => line.includes("d/Esc close")));
+	assert.ok(lines.length <= 9);
+	assert.ok(styled.some(([color, text]) => color === "mdHeading" && text.includes("Decision")));
+
+	browser.handleInput("escape");
+	assert.equal(browser.render(60).some((line) => line.includes("d/Esc close")), false);
+	browser.handleInput("j");
+	assert.equal(browser.getSelectedInboxEntryId(), "inbox-2");
+});
+
+test("browser recovers Inbox selection when the selected entry disappears", () => {
+	let state = addInboxEntry(createInitialTaskUiState(), {
+		kind: "feedback_needed",
+		markdown: "Remaining question",
+	}, "2026-09-11T09:00:00.000Z").state;
+	state = addInboxEntry(state, { kind: "info", markdown: "Removed info" }, "2026-09-11T10:00:00.000Z").state;
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		italic: (text: string) => text,
+		underline: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const browser = new TaskBrowserComponent(
+		() => state,
+		() => "✳",
+		() => 8,
+		theme as never,
+		{ matches: () => false } as never,
+		() => {},
+		() => {},
+		"inbox",
+	);
+
+	browser.handleInput("j");
+	assert.equal(browser.getSelectedInboxEntryId(), "inbox-2");
+	browser.handleInput("d");
+	state = { ...state, inbox: state.inbox.filter((entry) => entry.id !== "inbox-2") };
+	const lines = browser.render(50).map(stripVTControlCharacters);
+	assert.equal(browser.getSelectedInboxEntryId(), "inbox-1");
+	assert.ok(lines.some((line) => line.includes("Remaining question")));
+	assert.equal(lines.some((line) => line.includes("Removed info")), false);
 });
 
 test("browser toggles a details pane for the selected task", () => {
