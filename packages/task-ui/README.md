@@ -2,7 +2,7 @@
 
 A backend-neutral task sidebar for Pi.
 
-![Task sidebar showing executing and completed work](assets/task-ui.png)
+![Task sidebar showing tasks and Inbox entries](assets/task-ui.jpg)
 
 `task-ui` is deliberately presentation-only:
 
