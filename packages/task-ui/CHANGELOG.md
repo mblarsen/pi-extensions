@@ -1,5 +1,11 @@
 # @mblarsen/pi-task-ui
 
+## 2.3.1
+
+### Patch Changes
+
+- 7991623: Preserve the Inbox preview text color after inline Markdown formatting.
+
 ## 2.3.0
 
 ### Minor Changes
