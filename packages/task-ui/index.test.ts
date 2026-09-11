@@ -84,7 +84,11 @@ test("registers only presentation tools, adapter events, and lifecycle UI hooks"
 		"task_ui_stop",
 	]);
 	assert.ok(tools.every((tool) => /projection|UI/i.test(tool.description)));
-	assert.match(tools.find((tool) => tool.name === "task_ui_inbox")!.description, /never replaces.*normal user-facing response/is);
+	const inboxDescription = tools.find((tool) => tool.name === "task_ui_inbox")!.description;
+	assert.match(inboxDescription, /one-way agent-to-user attention queue/is);
+	assert.match(inboxDescription, /not an agent-to-agent channel or shared memory/is);
+	assert.match(inboxDescription, /never add the user's own.*decisions/is);
+	assert.match(inboxDescription, /complete normal response.*supplements/is);
 	assert.deepEqual(commands, ["task-ui"]);
 	assert.deepEqual(getArgumentCompletions?.("b")?.map((item) => item.value), ["browse"]);
 	assert.deepEqual(getArgumentCompletions?.("")?.map((item) => item.value), ["browse", "inbox", "sidebar", "hide", "cycle"]);

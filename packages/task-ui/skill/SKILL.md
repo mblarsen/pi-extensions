@@ -7,18 +7,28 @@ description: Keeps the task-ui sidebar synchronized while coordinating multi-ste
 
 Use the `task_ui_*` tools to maintain a truthful UI projection of work. These tools never plan, execute, coordinate, cancel, or inspect backend work themselves.
 
-## Inbox: always send the normal response
+## Inbox: reserve it for user attention
 
-Use `task_ui_inbox` when an important answer, takeaway, question, or decision must remain visible to the user.
+The Inbox is a one-way agent-to-user attention queue. It is not conversation history, shared memory, or an agent-to-agent channel.
 
-Always do both actions:
+Call `task_ui_inbox` with `operation: "add"` only when all these conditions are true:
+
+- The entry contains new agent-provided information or an unanswered question for the user.
+- The user benefits from keeping the entry visible after the normal response moves out of view.
+- The entry is important and not routine.
+
+Never copy the user's own statements, context, selections, approvals, or decisions into the Inbox. Relay them through the actual agent coordination channel when another agent needs them. If the user answers a feedback entry, resolve it. Do not replace it with an informational summary of the user's answer.
+
+For example, the user says, "Use option B." Relay that decision to affected agents. Resolve any related feedback entry. Do not add "Use option B" as an informational Inbox entry.
+
+When an entry qualifies, always do both actions:
 
 1. Send the complete user-facing response in normal chat.
 2. Call `task_ui_inbox` with a concise summary or the exact question.
 
-The Inbox entry can differ from the normal response. It supplements the response and never replaces it.
+The Inbox entry supplements the response. It never replaces the response.
 
-Use `kind: "info"` for a concise, self-contained takeaway. Use `kind: "feedback_needed"` for the exact question or decision that needs a user response.
+Use `kind: "info"` only for an important agent-provided result that the user must notice later. Use `kind: "feedback_needed"` only for an exact unanswered question that needs a user response.
 
 Inbox Markdown has a 400-character source limit. Link an entry to a projected task with `task_id` when the relationship helps the user.
 
@@ -34,6 +44,9 @@ task_ui_inbox({ operation: "resolve", entry_id: "inbox-3" })
 
 Do not create an Inbox entry for:
 
+- information that the user gave to the agent
+- a choice, approval, or decision that the user already made
+- information intended for another agent or worker
 - a routine acknowledgment
 - an internal agent or worker message
 - a routine progress update already visible in the task list
@@ -72,7 +85,9 @@ task_ui_inbox({
 
 Continue unrelated work. Do not treat the Inbox operation as a user response.
 
-When a sub-agent needs user input, the coordinating agent must relay the question in normal chat. The coordinating agent must also add the feedback entry. Do not copy an internal worker message without user context.
+If the user replies, resolve the feedback entry. Relay the answer through the actual agent coordination channel. Do not add the answer as a new Inbox entry.
+
+When a sub-agent needs user input, the coordinating agent must relay the question in normal chat. Add a feedback entry only if it passes the three conditions above. Do not copy an internal worker message without user context.
 
 When work stops but a timer or heartbeat continues monitoring, send the normal status response first. Add an important takeaway if one must remain visible. Then start or keep the timer or heartbeat. The Inbox call does not replace the status response or the monitoring tool.
 
