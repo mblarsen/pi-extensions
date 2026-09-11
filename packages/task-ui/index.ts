@@ -479,7 +479,13 @@ function inboxEntryRows(entry: InboxEntry, tasks: TaskRecord[], width: number, t
 		? theme.fg("warning", "Feedback needed")
 		: theme.fg("accent", "Info");
 	const task = inboxTaskLabel(entry, tasks, theme);
-	const markdown = new Markdown(entry.markdown, 0, 0, markdownThemeFor(theme));
+	const markdown = new Markdown(
+		entry.markdown,
+		0,
+		0,
+		markdownThemeFor(theme),
+		{ color: (text) => theme.fg("dim", text) },
+	);
 	const preview = markdown.render(Math.max(1, width - 4)).filter((line) => visibleWidth(line) > 0);
 	return [
 		dimmedBoxRow(`${label}${task}`, width, theme),
