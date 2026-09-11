@@ -1,37 +1,47 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
+	Markdown,
 	matchesKey,
 	Text,
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
 	type KeybindingsManager,
+	type MarkdownTheme,
 	type OverlayHandle,
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
 	TASK_LIST_SCOPES,
 	TASK_STATUSES,
+	addInboxEntry,
 	appendTaskOutput,
+	clearInfoInboxEntries,
 	clearTaskOutput,
 	cloneTaskUiState,
 	createInitialTaskUiState,
 	createTask,
 	createTasks,
+	getInboxCounts,
 	getTaskDashboard,
 	getTaskDepth,
 	getTaskDisplayNumber,
+	listInboxEntries,
 	listTasks,
 	normalizeStoredTaskUiState,
 	orderTasksForDisplay,
 	removeTask,
 	replaceExternalTasks,
+	resolveInboxEntry,
 	setFocusedTask,
 	updateTask,
 	upsertExternalTask,
 	type CreateTaskInput,
 	type ExternalTaskInput,
+	type InboxCounts,
+	type InboxEntry,
+	type InboxEntryKind,
 	type TaskDashboard,
 	type TaskListSelector,
 	type TaskRecord,
@@ -48,6 +58,8 @@ const MAX_VISIBLE_WORK_TASKS = 7;
 const MAX_VISIBLE_HISTORY_TASKS = 3;
 const MAX_SIDEBAR_DESCRIPTION_TASKS = 3;
 const MAX_SIDEBAR_DESCRIPTION_LINES = 3;
+const MAX_VISIBLE_INBOX_ENTRIES = 3;
+const MAX_SIDEBAR_INBOX_PREVIEW_LINES = 2;
 const MAX_BROWSER_DETAILS_RATIO = 0.4;
 const SPINNER_FRAMES = ["✳", "✽", "•"] as const;
 const COMPLETED_ICON = "\x1b[38;2;34;197;94m✔\x1b[39m";
@@ -82,6 +94,20 @@ type TaskToolDetails = {
 	removedCount?: number;
 	reason?: string;
 	path?: string;
+};
+
+type InboxToolDetails = {
+	action: "add" | "resolve" | "list" | "clear";
+	entry?: InboxEntry;
+	entries?: InboxEntry[];
+	selector?: { kind?: InboxEntryKind };
+	counts: InboxCounts;
+	evictedInfoIds?: string[];
+	resolvedEntry?: InboxEntry;
+	nextFeedbackEntry?: InboxEntry | null;
+	removedCount?: number;
+	suggestedNextTask?: TaskRecord | null;
+	suggestedAction?: string;
 };
 
 type SnapshotEvent = { tasks: ExternalTaskInput[]; focusedTaskId?: string };
@@ -148,6 +174,17 @@ function toCreateTaskInput(input: AgentTaskInput): CreateTaskInput {
 		inputTokens: input.input_tokens,
 		outputTokens: input.output_tokens,
 	};
+}
+
+function assertInboxOperationFields(params: Record<string, unknown> & { operation: "add" | "resolve" | "list" | "clear" }): void {
+	const allowedByOperation = {
+		add: new Set(["operation", "kind", "markdown", "task_id"]),
+		resolve: new Set(["operation", "entry_id"]),
+		list: new Set(["operation", "kind"]),
+		clear: new Set(["operation"]),
+	} as const;
+	const unexpected = Object.keys(params).find((key) => params[key] !== undefined && !allowedByOperation[params.operation].has(key));
+	if (unexpected) throw new Error(`task_ui_inbox ${params.operation} does not accept ${unexpected}`);
 }
 
 function taskListSelector(params: {
@@ -411,6 +448,84 @@ function dimmedBoxDivider(width: number, theme: Theme): string {
 	return dimmedBoxRow("─".repeat(Math.max(0, width - 4)), width, theme);
 }
 
+function markdownThemeFor(theme: Theme): MarkdownTheme {
+	return {
+		heading: (text) => theme.fg("mdHeading", text),
+		link: (text) => theme.fg("mdLink", text),
+		linkUrl: (text) => theme.fg("mdLinkUrl", text),
+		code: (text) => theme.fg("mdCode", text),
+		codeBlock: (text) => theme.fg("mdCodeBlock", text),
+		codeBlockBorder: (text) => theme.fg("mdCodeBlockBorder", text),
+		quote: (text) => theme.fg("mdQuote", text),
+		quoteBorder: (text) => theme.fg("mdQuoteBorder", text),
+		hr: (text) => theme.fg("mdHr", text),
+		listBullet: (text) => theme.fg("mdListBullet", text),
+		bold: (text) => theme.bold(text),
+		italic: (text) => theme.italic(text),
+		strikethrough: (text) => theme.strikethrough(text),
+		underline: (text) => theme.underline(text),
+	};
+}
+
+function inboxTaskLabel(entry: InboxEntry, tasks: TaskRecord[], theme: Theme): string {
+	if (!entry.taskId) return "";
+	const linkedTask = tasks.find((task) => task.id === entry.taskId);
+	const display = linkedTask ? getTaskDisplayNumber(linkedTask, tasks) : entry.taskId;
+	return theme.fg("dim", ` #${display}`);
+}
+
+function inboxEntryRows(entry: InboxEntry, tasks: TaskRecord[], width: number, theme: Theme): string[] {
+	const label = entry.kind === "feedback_needed"
+		? theme.fg("warning", "Feedback needed")
+		: theme.fg("accent", "Info");
+	const task = inboxTaskLabel(entry, tasks, theme);
+	const markdown = new Markdown(entry.markdown, 0, 0, markdownThemeFor(theme));
+	const preview = markdown.render(Math.max(1, width - 4)).filter((line) => visibleWidth(line) > 0);
+	return [
+		dimmedBoxRow(`${label}${task}`, width, theme),
+		...cropDescription(preview, MAX_SIDEBAR_INBOX_PREVIEW_LINES, Math.max(1, width - 4))
+			.map((line) => dimmedBoxRow(line, width, theme)),
+	];
+}
+
+function renderInboxSection(entries: InboxEntry[], tasks: TaskRecord[], hiddenCount: number, width: number, theme: Theme): string[] {
+	if (entries.length === 0) return [];
+	const title = " Inbox ";
+	const topFill = Math.max(0, width - visibleWidth(title) - 2);
+	const lines = [theme.fg("borderMuted", `╭${title}${"─".repeat(topFill)}╮`)];
+	for (const [index, entry] of entries.entries()) {
+		if (index > 0) lines.push(dimmedBoxDivider(width, theme));
+		lines.push(...inboxEntryRows(entry, tasks, width, theme));
+	}
+	if (hiddenCount > 0) lines.push(dimmedBoxRow(`… and ${hiddenCount} more`, width, theme));
+	lines.push(theme.fg("borderMuted", `╰${"─".repeat(Math.max(0, width - 2))}╯`));
+	return lines;
+}
+
+function renderDescriptionSection(descriptions: string[][], maxRows: number, width: number, theme: Theme): string[] {
+	if (!descriptions.length || maxRows < 3) return [];
+	const descriptionLines: string[] = [];
+	let contentRows = maxRows - 2;
+	for (const wrapped of descriptions) {
+		const dividerRows = descriptionLines.length ? 1 : 0;
+		if (contentRows <= dividerRows) break;
+		const visible = cropDescription(wrapped, Math.min(MAX_SIDEBAR_DESCRIPTION_LINES, contentRows - dividerRows), Math.max(1, width - 4));
+		if (!visible.length) break;
+		if (dividerRows) {
+			descriptionLines.push(dimmedBoxDivider(width, theme));
+			contentRows -= 1;
+		}
+		descriptionLines.push(...visible.map((line) => dimmedBoxRow(line, width, theme)));
+		contentRows -= visible.length;
+	}
+	if (!descriptionLines.length) return [];
+	return [
+		theme.fg("dim", `╭${"─".repeat(Math.max(0, width - 2))}╮`),
+		...descriptionLines,
+		theme.fg("dim", `╰${"─".repeat(Math.max(0, width - 2))}╯`),
+	];
+}
+
 export class TaskBarComponent {
 	private readonly getState: () => TaskUiState;
 	private readonly getSpinnerFrame: () => string;
@@ -432,17 +547,18 @@ export class TaskBarComponent {
 	render(width: number): string[] {
 		const state = this.getState();
 		const tasks = state.tasks;
-		if (!tasks.length) return [];
+		if (!tasks.length && !state.inbox.length) return [];
 		const work = orderTasksForDisplay(tasks.filter((task) => task.status === "in_progress" || task.status === "pending"));
 		const visibleWork = work.slice(0, MAX_VISIBLE_WORK_TASKS);
 		const history = tasks
 			.filter((task) => ["completed", "failed", "stopped"].includes(task.status))
 			.sort((left, right) => (right.terminalAt ?? right.updatedAt).localeCompare(left.terminalAt ?? left.updatedAt) || right.number - left.number);
-		const topTitle = " Tasks ";
-		const topFill = Math.max(0, width - visibleWidth(topTitle) - 2);
-		const lines = [this.theme.fg("borderMuted", `╭${topTitle}${"─".repeat(topFill)}╮`)];
+		const lines: string[] = [];
 
 		if (tasks.length > 0) {
+			const topTitle = " Tasks ";
+			const topFill = Math.max(0, width - visibleWidth(topTitle) - 2);
+			lines.push(this.theme.fg("borderMuted", `╭${topTitle}${"─".repeat(topFill)}╮`));
 			if (work.length) {
 				for (const task of visibleWork) {
 					lines.push(framedTaskRow(taskLine(task, tasks, task.id === state.focusedTaskId, this.getSpinnerFrame(), this.theme), task.label, width, this.theme));
@@ -466,40 +582,38 @@ export class TaskBarComponent {
 					));
 				}
 			}
+			lines.push(this.theme.fg("borderMuted", `╰${"─".repeat(Math.max(0, width - 2))}╯`));
 		}
-
-		lines.push(this.theme.fg("borderMuted", `╰${"─".repeat(Math.max(0, width - 2))}╯`));
 
 		const descriptions = visibleWork
 			.filter((task) => task.status === "in_progress" && task.executing && task.description?.trim())
 			.slice(0, MAX_SIDEBAR_DESCRIPTION_TASKS)
 			.map((task) => wrapDescription(task.description!, Math.max(1, width - 4)));
-		const remainingRows = Math.floor(this.getViewportHeight()) - lines.length;
-		if (!descriptions.length || remainingRows < 3) {
-			return lines.map((line) => truncateToWidth(line, width, ""));
+		const availableRows = Math.max(0, Math.floor(this.getViewportHeight()) - lines.length);
+		const orderedInbox = listInboxEntries(state);
+		const selectedInbox: InboxEntry[] = [];
+		const trySelectInboxEntry = (entry: InboxEntry, rowBudget: number): boolean => {
+			if (selectedInbox.length >= MAX_VISIBLE_INBOX_ENTRIES) return false;
+			const candidate = [...selectedInbox, entry];
+			if (renderInboxSection(candidate, tasks, 0, width, this.theme).length > rowBudget) return false;
+			selectedInbox.push(entry);
+			return true;
+		};
+
+		for (const entry of orderedInbox.filter((item) => item.kind === "feedback_needed")) {
+			if (!trySelectInboxEntry(entry, availableRows)) break;
+		}
+		const reservedFeedbackRows = renderInboxSection(selectedInbox, tasks, 0, width, this.theme).length;
+		const descriptionLines = renderDescriptionSection(descriptions, availableRows - reservedFeedbackRows, width, this.theme);
+		const inboxRowBudget = availableRows - descriptionLines.length;
+		for (const entry of orderedInbox.filter((item) => item.kind === "info")) {
+			if (!trySelectInboxEntry(entry, inboxRowBudget)) break;
 		}
 
-		const descriptionLines: string[] = [];
-		let contentRows = remainingRows - 2;
-		for (const wrapped of descriptions) {
-			const dividerRows = descriptionLines.length ? 1 : 0;
-			if (contentRows <= dividerRows) break;
-			const visible = cropDescription(wrapped, Math.min(MAX_SIDEBAR_DESCRIPTION_LINES, contentRows - dividerRows), Math.max(1, width - 4));
-			if (!visible.length) break;
-			if (dividerRows) {
-				descriptionLines.push(dimmedBoxDivider(width, this.theme));
-				contentRows -= 1;
-			}
-			descriptionLines.push(...visible.map((line) => dimmedBoxRow(line, width, this.theme)));
-			contentRows -= visible.length;
-		}
-		if (!descriptionLines.length) return lines.map((line) => truncateToWidth(line, width, ""));
-
-		lines.push(
-			this.theme.fg("dim", `╭${"─".repeat(Math.max(0, width - 2))}╮`),
-			...descriptionLines,
-			this.theme.fg("dim", `╰${"─".repeat(Math.max(0, width - 2))}╯`),
-		);
+		const hiddenCount = orderedInbox.length - selectedInbox.length;
+		let inboxLines = renderInboxSection(selectedInbox, tasks, hiddenCount, width, this.theme);
+		if (inboxLines.length > inboxRowBudget) inboxLines = renderInboxSection(selectedInbox, tasks, 0, width, this.theme);
+		lines.push(...descriptionLines, ...inboxLines);
 		return lines.map((line) => truncateToWidth(line, width, ""));
 	}
 
@@ -507,8 +621,11 @@ export class TaskBarComponent {
 }
 
 export class TaskBrowserComponent {
+	private activeTab: "tasks" | "inbox";
 	private selectedTaskId: string | undefined;
+	private selectedInboxEntryId: string | undefined;
 	private scrollOffset = 0;
+	private inboxScrollOffset = 0;
 	private awaitingG = false;
 	private detailsOpen = false;
 	private descriptionScrollOffset = 0;
@@ -531,6 +648,7 @@ export class TaskBrowserComponent {
 		keybindings: KeybindingsManager,
 		requestRender: () => void,
 		onClose: (target: "sidebar" | "off") => void,
+		initialTab: "tasks" | "inbox" = "tasks",
 	) {
 		this.getState = getState;
 		this.getSpinnerFrame = getSpinnerFrame;
@@ -539,21 +657,35 @@ export class TaskBrowserComponent {
 		this.keybindings = keybindings;
 		this.requestRender = requestRender;
 		this.onClose = onClose;
+		this.activeTab = initialTab;
 		this.listCapacity = Math.max(1, Math.floor(this.getViewportHeight()) - 3);
 		const state = this.getState();
 		const ordered = orderTasksForDisplay(state.tasks);
 		this.selectedTaskId = ordered.some((task) => task.id === state.focusedTaskId)
 			? state.focusedTaskId
 			: ordered[0]?.id;
+		this.selectedInboxEntryId = listInboxEntries(state)[0]?.id;
 	}
 
 	getSelectedTaskId(): string | undefined {
 		return this.selectedTaskId;
 	}
 
+	getSelectedInboxEntryId(): string | undefined {
+		return this.selectedInboxEntryId;
+	}
+
 	handleInput(data: string): void {
 		if (matchesKey(data, "alt+u")) {
 			this.onClose("off");
+			return;
+		}
+		if (matchesKey(data, "tab")) {
+			this.activeTab = this.activeTab === "tasks" ? "inbox" : "tasks";
+			this.awaitingG = false;
+			this.detailsOpen = false;
+			this.descriptionScrollOffset = 0;
+			this.requestRender();
 			return;
 		}
 		if (this.detailsOpen) {
@@ -595,6 +727,37 @@ export class TaskBrowserComponent {
 			return;
 		}
 
+		if (this.activeTab === "inbox") {
+			const entries = listInboxEntries(this.getState());
+			if (!entries.length) return;
+			const currentIndex = Math.max(0, entries.findIndex((entry) => entry.id === this.selectedInboxEntryId));
+			const halfPage = Math.max(1, Math.floor(this.listCapacity / 2));
+			let nextIndex = currentIndex;
+			if (this.awaitingG) {
+				this.awaitingG = false;
+				if (data === "g") nextIndex = 0;
+				else if (data === "G") nextIndex = entries.length - 1;
+				else return;
+			} else if (data === "g") {
+				this.awaitingG = true;
+				return;
+			} else if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
+				nextIndex = Math.max(0, currentIndex - 1);
+			} else if (this.keybindings.matches(data, "tui.select.down") || data === "j") {
+				nextIndex = Math.min(entries.length - 1, currentIndex + 1);
+			} else if (matchesKey(data, "ctrl+u")) {
+				nextIndex = Math.max(0, currentIndex - halfPage);
+			} else if (matchesKey(data, "ctrl+d")) {
+				nextIndex = Math.min(entries.length - 1, currentIndex + halfPage);
+			} else {
+				return;
+			}
+			this.selectedInboxEntryId = entries[nextIndex]?.id;
+			this.descriptionScrollOffset = 0;
+			this.requestRender();
+			return;
+		}
+
 		const tasks = orderTasksForDisplay(this.getState().tasks);
 		if (!tasks.length) return;
 		const currentIndex = Math.max(0, tasks.findIndex((task) => task.id === this.selectedTaskId));
@@ -627,6 +790,7 @@ export class TaskBrowserComponent {
 	}
 
 	render(width: number): string[] {
+		if (this.activeTab === "inbox") return this.renderInbox(width);
 		const state = this.getState();
 		const tasks = orderTasksForDisplay(state.tasks);
 		let selectedIndex = tasks.findIndex((task) => task.id === this.selectedTaskId);
@@ -666,7 +830,7 @@ export class TaskBrowserComponent {
 		);
 
 		const position = selectedIndex >= 0 ? `${selectedIndex + 1}/${tasks.length}` : "0/0";
-		const title = ` Tasks · ${position} `;
+		const title = ` ${this.theme.fg("accent", "[ Tasks ]")} ${this.theme.fg("dim", `[ Inbox · ${state.inbox.length} ]`)} · ${position} `;
 		const topFill = Math.max(0, width - visibleWidth(title) - 2);
 		const lines = [this.theme.fg("borderAccent", `╭${title}${"─".repeat(topFill)}╮`)];
 
@@ -703,7 +867,95 @@ export class TaskBrowserComponent {
 			}
 		} else {
 			lines.push(framedRow(
-				this.theme.fg("dim", "↑↓/jk move · Ctrl-U/D half-page · gg/gG jump · d details · Esc/q sidebar · Alt-U off"),
+				this.theme.fg("dim", "Tab switch · ↑↓/jk move · Ctrl-U/D half-page · gg/gG jump · d details · Esc/q sidebar · Alt-U off"),
+				width,
+				this.theme,
+			));
+		}
+		lines.push(this.theme.fg("borderAccent", `╰${"─".repeat(Math.max(0, width - 2))}╯`));
+		return lines.map((line) => truncateToWidth(line, width, ""));
+	}
+
+	private renderInbox(width: number): string[] {
+		const state = this.getState();
+		const entries = listInboxEntries(state);
+		let selectedIndex = entries.findIndex((entry) => entry.id === this.selectedInboxEntryId);
+		if (selectedIndex < 0 && entries.length) {
+			selectedIndex = 0;
+			this.selectedInboxEntryId = entries[0]?.id;
+			this.descriptionScrollOffset = 0;
+		}
+		const viewportHeight = Math.max(4, Math.floor(this.getViewportHeight()));
+		const showDetailsDivider = this.detailsOpen && viewportHeight >= 5;
+		const showDetailsFooter = this.detailsOpen && viewportHeight >= 6;
+		if (this.detailsOpen) {
+			const selectedEntry = selectedIndex >= 0 ? entries[selectedIndex] : undefined;
+			this.descriptionLines = new Markdown(
+				selectedEntry?.markdown ?? "No Inbox entry",
+				0,
+				0,
+				markdownThemeFor(this.theme),
+			).render(Math.max(1, width - 4));
+			const chromeRows = 2 + Number(showDetailsDivider) + Number(showDetailsFooter);
+			const availableContentRows = Math.max(2, viewportHeight - chromeRows);
+			this.detailsCapacity = Math.max(1, Math.min(
+				this.descriptionLines.length,
+				Math.max(1, Math.floor(viewportHeight * MAX_BROWSER_DETAILS_RATIO)),
+				availableContentRows - 1,
+			));
+			this.listCapacity = Math.max(1, availableContentRows - this.detailsCapacity);
+		} else {
+			this.descriptionLines = [];
+			this.detailsCapacity = 1;
+			this.listCapacity = Math.max(1, viewportHeight - 3);
+		}
+
+		if (selectedIndex < this.inboxScrollOffset) this.inboxScrollOffset = selectedIndex;
+		if (selectedIndex >= this.inboxScrollOffset + this.listCapacity) this.inboxScrollOffset = selectedIndex - this.listCapacity + 1;
+		this.inboxScrollOffset = Math.max(0, Math.min(this.inboxScrollOffset, Math.max(0, entries.length - this.listCapacity)));
+		this.descriptionScrollOffset = Math.max(
+			0,
+			Math.min(this.descriptionScrollOffset, Math.max(0, this.descriptionLines.length - this.detailsCapacity)),
+		);
+
+		const position = selectedIndex >= 0 ? `${selectedIndex + 1}/${entries.length}` : "0/0";
+		const title = ` ${this.theme.fg("dim", "[ Tasks ]")} ${this.theme.fg("accent", `[ Inbox · ${entries.length} ]`)} · ${position} `;
+		const topFill = Math.max(0, width - visibleWidth(title) - 2);
+		const lines = [this.theme.fg("borderAccent", `╭${title}${"─".repeat(topFill)}╮`)];
+		if (!entries.length) {
+			lines.push(framedRow(this.theme.fg("muted", "No Inbox entries"), width, this.theme));
+		} else {
+			for (const [visibleIndex, entry] of entries.slice(this.inboxScrollOffset, this.inboxScrollOffset + this.listCapacity).entries()) {
+				const entryIndex = this.inboxScrollOffset + visibleIndex;
+				const selected = entryIndex === selectedIndex;
+				const prefix = selected ? this.theme.fg("accent", "› ") : "  ";
+				const label = entry.kind === "feedback_needed"
+					? this.theme.fg("warning", "Feedback needed")
+					: this.theme.fg("accent", "Info");
+				const task = inboxTaskLabel(entry, state.tasks, this.theme);
+				const preview = new Markdown(entry.markdown, 0, 0, markdownThemeFor(this.theme))
+					.render(Math.max(1, width - visibleWidth(prefix + label + task) - 5))
+					.find((line) => visibleWidth(line) > 0) ?? "";
+				lines.push(framedRow(`${prefix}${label}${task} ${preview}`, width, this.theme));
+			}
+		}
+		if (this.detailsOpen) {
+			const rangeStart = this.descriptionScrollOffset + 1;
+			const rangeEnd = Math.min(this.descriptionLines.length, this.descriptionScrollOffset + this.detailsCapacity);
+			if (showDetailsDivider) lines.push(divider(`details · ${rangeStart}–${rangeEnd}/${this.descriptionLines.length}`, width, this.theme));
+			for (const line of this.descriptionLines.slice(this.descriptionScrollOffset, this.descriptionScrollOffset + this.detailsCapacity)) {
+				lines.push(framedRow(line, width, this.theme));
+			}
+			if (showDetailsFooter) {
+				lines.push(framedRow(
+					this.theme.fg("dim", "d/Esc close · ↑↓/jk scroll · Ctrl-U/D half-page · q sidebar · Alt-U off"),
+					width,
+					this.theme,
+				));
+			}
+		} else {
+			lines.push(framedRow(
+				this.theme.fg("dim", "Tab switch · ↑↓/jk move · Ctrl-U/D half-page · gg/gG jump · d details · Esc/q sidebar · Alt-U off"),
 				width,
 				this.theme,
 			));
@@ -826,14 +1078,14 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		});
 	};
 
-	const showBrowser = async (ctx: ExtensionContext) => {
+	const showBrowser = async (ctx: ExtensionContext, initialTab: "tasks" | "inbox" = "tasks") => {
 		if (browseOpen) return;
 		if (ctx.mode !== "tui") {
 			ctx.ui.notify("Task browser requires interactive mode", "warning");
 			return;
 		}
-		if (!state.tasks.length) {
-			ctx.ui.notify("No projected tasks to browse", "info");
+		if (!state.tasks.length && !state.inbox.length) {
+			ctx.ui.notify("No projected tasks or Inbox entries to browse", "info");
 			return;
 		}
 
@@ -853,6 +1105,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 					keybindings,
 					() => tui.requestRender(),
 					done,
+					initialTab,
 				);
 			}, {
 				overlay: true,
@@ -921,7 +1174,8 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		try {
 			const event = payload as SnapshotEvent;
 			if (!Array.isArray(event.tasks)) throw new Error("task-ui:snapshot requires tasks[]");
-			setState(replaceExternalTasks(event.tasks, event.focusedTaskId));
+			const taskState = replaceExternalTasks(event.tasks, event.focusedTaskId);
+			setState({ ...taskState, inbox: state.inbox.map((entry) => ({ ...entry })), nextInboxId: state.nextInboxId });
 		} catch (error) { reportEventError(error); }
 	});
 	pi.events.on(TASK_UI_EVENTS.upsert, (payload) => {
@@ -1170,6 +1424,103 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerTool({
+		name: "task_ui_inbox",
+		label: "Task UI Inbox",
+		description: "Manage concise user-facing summaries in task-ui's presentation-only Inbox. This tool never replaces the normal user-facing response: send the complete response as usual and also call this tool when an Inbox entry is applicable.",
+		promptSnippet: "Add, resolve, list, or clear task-ui Inbox summaries (UI only)",
+		executionMode: "sequential",
+		parameters: Type.Object({
+			operation: StringEnum(["add", "resolve", "list", "clear"] as const),
+			kind: Type.Optional(StringEnum(["info", "feedback_needed"] as const)),
+			markdown: Type.Optional(Type.String({ maxLength: 400 })),
+			task_id: Type.Optional(Type.String()),
+			entry_id: Type.Optional(Type.String()),
+		}, { additionalProperties: false }),
+		async execute(_id, params) {
+			assertInboxOperationFields(params);
+			if (params.operation === "add") {
+				if (!params.kind) throw new Error("task_ui_inbox add requires kind");
+				if (!params.markdown) throw new Error("task_ui_inbox add requires markdown");
+				const result = addInboxEntry(state, {
+					kind: params.kind,
+					markdown: params.markdown,
+					taskId: params.task_id,
+				});
+				const suggestedNextTask = getTaskDashboard(result.state).next ?? null;
+				const baseSuggestion = "The Inbox entry supplements the normal user-facing response. Include the full response as usual and continue the planned work.";
+				const suggestedAction = result.entry.kind === "feedback_needed"
+					? `${baseSuggestion} Call task_ui_inbox({ operation: "resolve", entry_id: ${JSON.stringify(result.entry.id)} }) after the user answers.`
+					: baseSuggestion;
+				persistMutation(result.state);
+				return {
+					content: [{ type: "text", text: resultText(`Added ${result.entry.id} to the task-ui Inbox.`, suggestedNextTask, suggestedAction) }],
+					details: {
+						action: "add",
+						entry: result.entry,
+						counts: getInboxCounts(result.state),
+						evictedInfoIds: result.evictedInfoIds,
+						suggestedNextTask,
+						suggestedAction,
+					} as InboxToolDetails,
+				};
+			}
+			if (params.operation === "list") {
+				const selector = params.kind ? { kind: params.kind } : {};
+				const entries = listInboxEntries(state, selector);
+				const counts = getInboxCounts(state);
+				const suggestedNextTask = getTaskDashboard(state).next ?? null;
+				const suggestedAction = counts.feedbackNeeded >= 18
+					? "The feedback Inbox is near its limit. Resolve obsolete or duplicate entries, preserve requests that still need a user response, and prioritize the remainder."
+					: counts.feedbackNeeded > 0
+						? "Prioritize unresolved feedback and resolve each entry after the user answers."
+						: "No unresolved feedback remains. Continue the planned work.";
+				const text = entries.length
+					? entries.map((entry) => `${entry.id} [${entry.kind}]${entry.taskId ? ` #${entry.taskId}` : ""} ${entry.markdown}`).join("\n")
+					: "No Inbox entries matched the selector.";
+				return {
+					content: [{ type: "text", text: resultText(text, suggestedNextTask, suggestedAction) }],
+					details: { action: "list", entries, selector, counts, suggestedNextTask, suggestedAction } as InboxToolDetails,
+				};
+			}
+			if (params.operation === "resolve") {
+				if (!params.entry_id) throw new Error("task_ui_inbox resolve requires entry_id");
+				const result = resolveInboxEntry(state, params.entry_id);
+				const nextFeedbackEntry = listInboxEntries(result.state, { kind: "feedback_needed" })[0] ?? null;
+				const counts = getInboxCounts(result.state);
+				const suggestedNextTask = getTaskDashboard(result.state).next ?? null;
+				const suggestedAction = nextFeedbackEntry
+					? `Review the next unresolved feedback entry: ${nextFeedbackEntry.id}.`
+					: "No unresolved feedback remains. Continue the planned work.";
+				persistMutation(result.state);
+				return {
+					content: [{ type: "text", text: resultText(`Resolved and removed ${result.resolvedEntry.id} from the task-ui Inbox.`, suggestedNextTask, suggestedAction) }],
+					details: {
+						action: "resolve",
+						resolvedEntry: result.resolvedEntry,
+						nextFeedbackEntry,
+						counts,
+						suggestedNextTask,
+						suggestedAction,
+					} as InboxToolDetails,
+				};
+			}
+			const result = clearInfoInboxEntries(state);
+			const counts = getInboxCounts(result.state);
+			const suggestedNextTask = getTaskDashboard(result.state).next ?? null;
+			const suggestedAction = counts.feedbackNeeded > 0
+				? `${counts.feedbackNeeded} unresolved feedback entr${counts.feedbackNeeded === 1 ? "y" : "ies"} remains; resolve each only after the user answers or it becomes obsolete.`
+				: "No unresolved feedback remains. Continue the planned work.";
+			persistMutation(result.state);
+			return {
+				content: [{ type: "text", text: resultText(`Cleared ${result.removedCount} informational Inbox entr${result.removedCount === 1 ? "y" : "ies"}.`, suggestedNextTask, suggestedAction) }],
+				details: { action: "clear", removedCount: result.removedCount, counts, suggestedNextTask, suggestedAction } as InboxToolDetails,
+			};
+		},
+		renderCall: (args, theme) => renderToolCall("task_ui_inbox", args.operation, theme),
+		renderResult: (result, _options, theme) => renderToolResult(result as never, theme),
+	});
+
+	pi.registerTool({
 		name: "task_ui_remove",
 		label: "Task UI Remove",
 		description: "Remove one task from task-ui's presentation-only projection. Child tasks become root tasks. Backend unchanged.",
@@ -1195,13 +1546,14 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		name: "task_ui_clear",
 		label: "Task UI Clear",
 		description: "Clear every task from task-ui's presentation-only projection. Backend unchanged.",
-		promptSnippet: "Clear the entire task-ui projection (UI only)",
+		promptSnippet: "Clear all projected tasks in task-ui (UI only)",
 		executionMode: "sequential",
 		parameters: Type.Object({}),
 		async execute() {
 			const removedCount = state.tasks.length;
 			const suggestedAction = 'Call task_ui_batch_create({ tasks: [{ subject: "Describe the task" }] }) to rebuild the projection when needed.';
-			persistMutation(createInitialTaskUiState());
+			const clearedTasks = createInitialTaskUiState();
+			persistMutation({ ...clearedTasks, inbox: state.inbox.map((entry) => ({ ...entry })), nextInboxId: state.nextInboxId });
 			return {
 				content: [{ type: "text", text: resultText(`Cleared ${removedCount} projected tasks. Backend unchanged.`, null, suggestedAction) }],
 				details: { action: "clear", tasks: [], removedCount, suggestedNextTask: null, suggestedAction } as TaskToolDetails,
@@ -1249,6 +1601,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		getArgumentCompletions: (prefix) => {
 			const items = [
 				{ value: "browse", label: "browse", description: "Open the full task browser" },
+				{ value: "inbox", label: "inbox", description: "Open the task browser on Inbox" },
 				{ value: "sidebar", label: "sidebar", description: "Show the task sidebar" },
 				{ value: "hide", label: "hide", description: "Hide the task UI" },
 				{ value: "cycle", label: "cycle", description: "Cycle sidebar, browse, off" },
@@ -1265,6 +1618,10 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 				await showBrowser(ctx);
 				return;
 			}
+			if (action === "inbox") {
+				await showBrowser(ctx, "inbox");
+				return;
+			}
 			if (action === "sidebar") {
 				showSidebar(ctx);
 				return;
@@ -1273,7 +1630,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 				hideTaskUi(ctx);
 				return;
 			}
-			ctx.ui.notify("Usage: /task-ui [browse|sidebar|hide|cycle]", "warning");
+			ctx.ui.notify("Usage: /task-ui [browse|inbox|sidebar|hide|cycle]", "warning");
 		},
 	});
 

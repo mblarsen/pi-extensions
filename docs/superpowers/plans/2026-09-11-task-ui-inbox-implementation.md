@@ -12,6 +12,16 @@ Implement the approved design in:
 
 Do not treat the Inbox as a task backend or replace normal user-facing responses.
 
+## Progress
+
+- [x] Task 1: Add the Inbox domain model and lifecycle
+- [x] Task 2: Export Inbox entries to Markdown
+- [x] Task 3: Register and implement `task_ui_inbox`
+- [x] Task 4: Render Inbox entries in the sidebar
+- [x] Task 5: Add the Inbox tab to browse mode
+- [x] Task 6: Document the dual-output workflow and release impact
+- [x] Task 7: Verify the complete package change
+
 ## Task 1: Add the Inbox domain model and lifecycle
 
 **Files**

@@ -7,6 +7,83 @@ description: Keeps the task-ui sidebar synchronized while coordinating multi-ste
 
 Use the `task_ui_*` tools to maintain a truthful UI projection of work. These tools never plan, execute, coordinate, cancel, or inspect backend work themselves.
 
+## Inbox: always send the normal response
+
+Use `task_ui_inbox` when an important answer, takeaway, question, or decision must remain visible to the user.
+
+Always do both actions:
+
+1. Send the complete user-facing response in normal chat.
+2. Call `task_ui_inbox` with a concise summary or the exact question.
+
+The Inbox entry can differ from the normal response. It supplements the response and never replaces it.
+
+Use `kind: "info"` for a concise, self-contained takeaway. Use `kind: "feedback_needed"` for the exact question or decision that needs a user response.
+
+Inbox Markdown has a 400-character source limit. Link an entry to a projected task with `task_id` when the relationship helps the user.
+
+The Inbox keeps the newest 10 informational entries. It keeps unresolved feedback until the agent resolves it. The tool rejects feedback entry 21. Clean obsolete or duplicate feedback before you retry. Never discard an unanswered request only to make space.
+
+After the user answers, resolve the related entry:
+
+```ts
+task_ui_inbox({ operation: "resolve", entry_id: "inbox-3" })
+```
+
+`clear` removes informational entries only. It never removes unresolved feedback.
+
+Do not create an Inbox entry for:
+
+- a routine acknowledgment
+- an internal agent or worker message
+- a routine progress update already visible in the task list
+- a terminal completion summary
+- a duplicate of an unresolved entry
+
+### Inbox workflow examples
+
+For an informational answer while work continues, send the answer first:
+
+```text
+The API accepts one active cursor per session. I will use separate sessions for the two imports and continue the implementation.
+```
+
+Then add the takeaway and continue work:
+
+```ts
+task_ui_inbox({
+  operation: "add",
+  kind: "info",
+  markdown: "The API permits one active cursor per session. Separate sessions are required for concurrent imports.",
+  task_id: "imports",
+})
+```
+
+For a non-blocking feedback request, ask the user in normal chat. State which independent work will continue. Then add the exact question:
+
+```ts
+task_ui_inbox({
+  operation: "add",
+  kind: "feedback_needed",
+  markdown: "Should the export include archived records?",
+  task_id: "export",
+})
+```
+
+Continue unrelated work. Do not treat the Inbox operation as a user response.
+
+When a sub-agent needs user input, the coordinating agent must relay the question in normal chat. The coordinating agent must also add the feedback entry. Do not copy an internal worker message without user context.
+
+When work stops but a timer or heartbeat continues monitoring, send the normal status response first. Add an important takeaway if one must remain visible. Then start or keep the timer or heartbeat. The Inbox call does not replace the status response or the monitoring tool.
+
+After the user answers a feedback question, continue the normal conversation and remove the entry:
+
+```ts
+task_ui_inbox({ operation: "resolve", entry_id: "inbox-4" })
+```
+
+Use `task_ui_inbox({ operation: "list" })` to inspect all entries. Add `kind` to list only informational or feedback entries.
+
 ## When to track
 
 Track work when:
@@ -135,7 +212,7 @@ To stop real backend work:
 
 `task_ui_stop` alone never stops backend work.
 
-Use `task_ui_remove` when one obsolete item should disappear from the projection. Its children become root tasks. Use `task_ui_clear` only when the user explicitly wants the entire projected list cleared. Neither tool changes or cancels backend work; perform any matching backend action separately.
+Use `task_ui_remove` when one obsolete item should disappear from the projection. Its children become root tasks. Use `task_ui_clear` only when the user explicitly wants the projected task list cleared. It preserves Inbox entries. Neither tool changes or cancels backend work. Perform any matching backend action separately.
 
 ## Read and resynchronize
 
@@ -185,7 +262,9 @@ If the target exists, ask the user to confirm before replacement. Call the tool 
 
 The extension generates numbered headings, descriptions, statuses, and local dependency links. The export includes every task status.
 
-The export excludes labels, focus, progress, owners, timestamps, task output, and execution telemetry.
+The export also includes complete Inbox summaries in display order. It records each entry ID, kind, creation time, and optional task link.
+
+The export excludes labels, focus, progress, owners, task output, and execution telemetry.
 
 ## Follow tool-result guidance
 
@@ -206,6 +285,10 @@ The structured `details` additions are:
 | `get_dashboard` | `suggestedAction`; the dashboard already contains `next` |
 | `update` | `changedFields`, `newlyReady`, `suggestedAction`; terminal transitions also include `suggestedNextTask` |
 | `output:*` | `outputCount`; appends also include `suggestedAction` |
+| `inbox:add` | `entry`, `counts`, `evictedInfoIds`, `suggestedNextTask`, `suggestedAction` |
+| `inbox:list` | `entries`, `selector`, `counts`, `suggestedNextTask`, `suggestedAction` |
+| `inbox:resolve` | `resolvedEntry`, `nextFeedbackEntry`, `counts`, `suggestedNextTask`, `suggestedAction` |
+| `inbox:clear` | `removedCount`, `counts`, `suggestedNextTask`, `suggestedAction` |
 | `remove` | `detachedChildren`, `suggestedNextTask`, `suggestedAction` |
 | `clear` | `removedCount`, `suggestedNextTask: null`, `suggestedAction` |
 | `stop` | `reason`, `suggestedNextTask`, `suggestedAction` |
