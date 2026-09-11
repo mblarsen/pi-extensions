@@ -1432,8 +1432,8 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "task_ui_inbox",
 		label: "Task UI Inbox",
-		description: "Manage concise user-facing summaries in task-ui's presentation-only Inbox. This tool never replaces the normal user-facing response: send the complete response as usual and also call this tool when an Inbox entry is applicable.",
-		promptSnippet: "Add, resolve, list, or clear task-ui Inbox summaries (UI only)",
+		description: "Manage task-ui's presentation-only Inbox for important items that the user must notice or answer later. The Inbox is a one-way agent-to-user attention queue, not an agent-to-agent channel or shared memory. Never add the user's own statements, context, selections, approvals, or decisions. Never add internal coordination, acknowledgments, routine progress, or completion summaries. Send the complete normal response as usual; an applicable Inbox entry only supplements it.",
+		promptSnippet: "User-only attention queue. Never use it for agent messaging or to repeat user-provided information or decisions",
 		executionMode: "sequential",
 		parameters: Type.Object({
 			operation: StringEnum(["add", "resolve", "list", "clear"] as const),
