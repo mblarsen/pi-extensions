@@ -543,6 +543,52 @@ test("sidebar renders Inbox entries when there are no projected tasks", () => {
 	assert.ok(lines.some((line) => line.includes("Worker finished") && line.includes("three checks")));
 });
 
+test("sidebar restores the dim text color after Inbox Markdown formatting", () => {
+	const dimAnsi = "\x1b[38;5;244m";
+	const codeAnsi = "\x1b[38;5;117m";
+	const state = addInboxEntry(createInitialTaskUiState(), {
+		kind: "feedback_needed",
+		markdown: "Muted **bold** then `code` then muted.",
+	}, "2026-09-11T09:00:00.000Z").state;
+	const theme = {
+		fg: (color: string, text: string) => `${color === "dim" ? dimAnsi : color === "mdCode" ? codeAnsi : "\x1b[37m"}${text}\x1b[39m`,
+		bold: (text: string) => `\x1b[1m${text}\x1b[0m`,
+		italic: (text: string) => `\x1b[3m${text}\x1b[23m`,
+		underline: (text: string) => `\x1b[4m${text}\x1b[24m`,
+		strikethrough: (text: string) => `\x1b[9m${text}\x1b[29m`,
+	};
+	const row = new TaskBarComponent(() => state, () => "✳", theme as never, () => 20)
+		.render(80)
+		.find((line) => line.includes("Muted"));
+	assert.ok(row);
+
+	const foregroundAt = (needle: string): string => {
+		let foreground = "default";
+		let visible = "";
+		const foregrounds: string[] = [];
+		for (let index = 0; index < row.length;) {
+			const sgr = row.slice(index).match(/^\x1b\[([0-9;]*)m/);
+			if (sgr) {
+				if (sgr[1] === "" || sgr[1] === "0" || sgr[1] === "39") foreground = "default";
+				else if (sgr[1]?.startsWith("38;")) foreground = `\x1b[${sgr[1]}m`;
+				index += sgr[0].length;
+				continue;
+			}
+			foregrounds.push(foreground);
+			visible += row[index];
+			index += 1;
+		}
+		const index = visible.indexOf(needle);
+		assert.notEqual(index, -1);
+		return foregrounds[index] ?? "default";
+	};
+
+	assert.equal(foregroundAt("Muted"), dimAnsi);
+	assert.equal(foregroundAt("then code"), dimAnsi);
+	assert.equal(foregroundAt("code"), codeAnsi);
+	assert.equal(foregroundAt("then muted."), dimAnsi);
+});
+
 test("sidebar shows three ordered Inbox cards with task links and overflow", () => {
 	let state = createTasks(createInitialTaskUiState(), [{ id: "linked", subject: "Linked task" }]).state;
 	state = addInboxEntry(state, { kind: "info", markdown: "Old info" }, "2026-09-11T09:00:00.000Z").state;
