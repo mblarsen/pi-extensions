@@ -1,5 +1,15 @@
 # @mblarsen/pi-task-ui
 
+## 2.3.0
+
+### Minor Changes
+
+- d4b73e3: Add a persistent Inbox for informational updates and unresolved user feedback.
+
+### Patch Changes
+
+- d4b73e3: Update the README screenshot to show tasks and Inbox entries.
+
 ## 2.2.2
 
 ### Patch Changes
