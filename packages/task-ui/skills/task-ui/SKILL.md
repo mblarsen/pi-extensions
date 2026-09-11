@@ -126,7 +126,7 @@ Give each task:
 
 A description supplements the subject. Do not repeat the task title in the description. Omit the description for trivial tasks or when no confirmed context is available.
 
-The sidebar shows descriptions only for executing `in_progress` tasks. It selects up to three descriptions in depth-first display order and skips tasks without descriptions. Users can press `d` in browse mode to read the complete selected-task description.
+The sidebar shows descriptions only for executing `in_progress` tasks. It selects up to three descriptions in depth-first display order and skips tasks without descriptions. Browse mode always shows the complete description for the selected task. Users can scroll it with `Shift+↑`/`Shift+↓` or `J`/`K` while `↑`/`↓` and `j`/`k` continue to move through tasks.
 
 Labels render right-aligned. The same label receives the same theme-derived color everywhere; omit the label rather than inventing a meaningless category.
 

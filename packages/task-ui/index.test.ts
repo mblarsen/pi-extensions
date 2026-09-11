@@ -301,6 +301,7 @@ test("cycles sidebar → browse → off and supports named view commands", async
 	let sidebarHidden = false;
 	let browser: TaskBrowserComponent | undefined;
 	let browserCount = 0;
+	let browserOverlayOptions: { width?: string; maxHeight?: string; margin?: number } | undefined;
 	const theme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
@@ -313,7 +314,7 @@ test("cycles sidebar → browse → off and supports named view commands", async
 			notify() {},
 			custom(factory: (...args: never[]) => TaskBarComponent | TaskBrowserComponent, options: {
 				onHandle?: (handle: unknown) => void;
-				overlayOptions: { nonCapturing?: boolean };
+				overlayOptions: { nonCapturing?: boolean; width?: string; maxHeight?: string; margin?: number };
 			}) {
 				return new Promise((resolve) => {
 					const component = factory(
@@ -330,6 +331,7 @@ test("cycles sidebar → browse → off and supports named view commands", async
 						});
 					} else {
 						browser = component as TaskBrowserComponent;
+						browserOverlayOptions = options.overlayOptions;
 						browserCount += 1;
 					}
 				});
@@ -349,6 +351,12 @@ test("cycles sidebar → browse → off and supports named view commands", async
 	assert.equal(sidebarHidden, false);
 	let browsing = cycle();
 	assert.equal(sidebarHidden, true);
+	assert.deepEqual(browserOverlayOptions, {
+		anchor: "center",
+		width: "92%",
+		maxHeight: "90%",
+		margin: 1,
+	});
 	browser!.handleInput("\x1bu");
 	await browsing;
 	assert.equal(sidebarHidden, true);
@@ -767,6 +775,46 @@ test("browser shows every task in hierarchical number order", () => {
 	assert.match(lines.find((line) => line.includes("Pending child")) ?? "", /›/);
 });
 
+test("browser restores the muted border color after styled title fragments", () => {
+	const borderAnsi = "\x1b[38;5;244m";
+	const state = createTasks(createInitialTaskUiState(), [{ id: "task", subject: "Task" }]).state;
+	const theme = {
+		fg: (color: string, text: string) => `${color === "borderMuted" ? borderAnsi : "\x1b[38;5;45m"}${text}\x1b[39m`,
+		bold: (text: string) => text,
+		strikethrough: (text: string) => text,
+	};
+	const browser = new TaskBrowserComponent(
+		() => state,
+		() => "✳",
+		() => 8,
+		theme as never,
+		{ matches: () => false } as never,
+		() => {},
+		() => {},
+	);
+
+	const rendered = browser.render(60);
+	const topBorder = rendered[0] ?? "";
+	const bottomBorder = rendered.at(-1) ?? "";
+	assert.ok(topBorder.startsWith(borderAnsi));
+	assert.ok(bottomBorder.startsWith(borderAnsi));
+	let foreground = "default";
+	let closingBorderForeground = "default";
+	for (let index = 0; index < topBorder.length;) {
+		const sgr = topBorder.slice(index).match(/^\x1b\[([0-9;]*)m/);
+		if (sgr) {
+			if (sgr[1] === "" || sgr[1] === "0" || sgr[1] === "39") foreground = "default";
+			else if (sgr[1]?.startsWith("38;")) foreground = `\x1b[${sgr[1]}m`;
+			index += sgr[0].length;
+			continue;
+		}
+		if (topBorder[index] === "╮") closingBorderForeground = foreground;
+		index += 1;
+	}
+
+	assert.equal(closingBorderForeground, borderAnsi);
+});
+
 test("browser switches between Tasks and Inbox tabs", () => {
 	let state = createTasks(createInitialTaskUiState(), [{ id: "task", subject: "Task" }]).state;
 	state = addInboxEntry(state, { kind: "feedback_needed", markdown: "**Choose** a scope." }, "2026-09-11T09:00:00.000Z").state;
@@ -823,19 +871,18 @@ test("browser renders and scrolls selected Inbox details as Markdown", () => {
 		"inbox",
 	);
 
-	browser.handleInput("d");
 	let lines = browser.render(60).map(stripVTControlCharacters);
 	assert.ok(lines.some((line) => line.includes("Decision")));
 	assert.ok(lines.some((line) => line.includes("Alpha")));
 	assert.ok(lines.some((line) => line.includes("details")));
-	assert.ok(lines.some((line) => line.includes("d/Esc close")));
+	assert.ok(lines.some((line) => line.includes("Shift+↑↓/JK details")));
 	assert.ok(lines.length <= 9);
 	assert.ok(styled.some(([color, text]) => color === "mdHeading" && text.includes("Decision")));
 
-	browser.handleInput("escape");
-	assert.equal(browser.render(60).some((line) => line.includes("d/Esc close")), false);
 	browser.handleInput("j");
+	lines = browser.render(60).map(stripVTControlCharacters);
 	assert.equal(browser.getSelectedInboxEntryId(), "inbox-2");
+	assert.ok(lines.some((line) => line.includes("Older info")));
 });
 
 test("browser recovers Inbox selection when the selected entry disappears", () => {
@@ -864,7 +911,6 @@ test("browser recovers Inbox selection when the selected entry disappears", () =
 
 	browser.handleInput("j");
 	assert.equal(browser.getSelectedInboxEntryId(), "inbox-2");
-	browser.handleInput("d");
 	state = { ...state, inbox: state.inbox.filter((entry) => entry.id !== "inbox-2") };
 	const lines = browser.render(50).map(stripVTControlCharacters);
 	assert.equal(browser.getSelectedInboxEntryId(), "inbox-1");
@@ -872,40 +918,41 @@ test("browser recovers Inbox selection when the selected entry disappears", () =
 	assert.equal(lines.some((line) => line.includes("Removed info")), false);
 });
 
-test("browser toggles a details pane for the selected task", () => {
+test("browser always shows selected task details and keeps list navigation active", () => {
+	const description = Array.from({ length: 8 }, (_, index) => `First detail ${index + 1}`).join("\n");
 	const state = createTasks(createInitialTaskUiState(), [
-		{ id: "task", subject: "Task" },
+		{ id: "first", subject: "First task", description },
+		{ id: "second", subject: "Second task", description: "Second detail" },
 	]).state;
 	const theme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 		strikethrough: (text: string) => text,
 	};
-	const keybindings = { matches: (data: string, binding: string) => binding === "tui.select.cancel" && data === "escape" };
-	let closes = 0;
 	const browser = new TaskBrowserComponent(
 		() => state,
 		() => "✳",
 		() => 10,
 		theme as never,
-		keybindings as never,
+		{ matches: () => false } as never,
 		() => {},
-		() => { closes += 1; },
+		() => {},
 	);
 
-	assert.equal(browser.render(50).some((line) => line.includes("No description")), false);
-	browser.handleInput("d");
-	const open = browser.render(50).map(stripVTControlCharacters);
-	assert.ok(open.some((line) => line.includes("No description")));
-	assert.ok(open.some((line) => line.includes("d/Esc close")));
-	assert.ok(open.some((line) => line.includes("#1 Task")));
-	assert.ok(open.length <= 10);
+	let lines = browser.render(50).map(stripVTControlCharacters);
+	assert.ok(lines.some((line) => line.includes("details · 1–4/8")));
+	assert.ok(lines.some((line) => line.includes("First detail 4")));
 
-	browser.handleInput("escape");
-	assert.equal(browser.render(50).some((line) => line.includes("No description")), false);
-	assert.equal(closes, 0);
-	browser.handleInput("q");
-	assert.equal(closes, 1);
+	browser.handleInput("J");
+	lines = browser.render(50).map(stripVTControlCharacters);
+	assert.equal(browser.getSelectedTaskId(), "first");
+	assert.ok(lines.some((line) => line.includes("details · 2–5/8")));
+
+	browser.handleInput("j");
+	lines = browser.render(50).map(stripVTControlCharacters);
+	assert.equal(browser.getSelectedTaskId(), "second");
+	assert.ok(lines.some((line) => line.includes("Second detail")));
+	assert.ok(lines.some((line) => line.includes("details · 1–1/1")));
 });
 
 test("browser scrolls complete descriptions without hiding the selected task", () => {
@@ -941,20 +988,19 @@ test("browser scrolls complete descriptions without hiding the selected task", (
 		() => {},
 	);
 
-	browser.handleInput("d");
 	let lines = browser.render(50).map(stripVTControlCharacters);
 	assert.ok(lines.some((line) => line.includes("#10 Task 10")));
 	assert.ok(lines.some((line) => line.includes("details · 1–4/12")));
 	assert.ok(lines.some((line) => line.includes("Detail line 4")));
 	assert.equal(lines.some((line) => line.includes("Detail line 5")), false);
 
-	browser.handleInput("j");
-	browser.handleInput("\x04");
+	browser.handleInput("J");
+	browser.handleInput("\x1b[1;2B");
 	lines = browser.render(50).map(stripVTControlCharacters);
-	assert.ok(lines.some((line) => line.includes("details · 4–7/12")));
+	assert.ok(lines.some((line) => line.includes("details · 3–6/12")));
 	assert.equal(browser.getSelectedTaskId(), "task-10");
 
-	for (let index = 0; index < 20; index += 1) browser.handleInput("down");
+	for (let index = 0; index < 20; index += 1) browser.handleInput("J");
 	lines = browser.render(50).map(stripVTControlCharacters);
 	assert.ok(lines.some((line) => line.includes("details · 9–12/12")));
 	viewportHeight = 7;
@@ -962,7 +1008,12 @@ test("browser scrolls complete descriptions without hiding the selected task", (
 	assert.ok(lines.some((line) => line.includes("#10 Task 10")));
 	assert.ok(lines.some((line) => line.includes("details · 9–10/12")));
 
-	browser.handleInput("d");
+	browser.handleInput("K");
+	browser.handleInput("\x1b[1;2A");
+	lines = browser.render(50).map(stripVTControlCharacters);
+	assert.ok(lines.some((line) => line.includes("details · 7–8/12")));
+	assert.equal(browser.getSelectedTaskId(), "task-10");
+
 	browser.handleInput("j");
 	assert.equal(browser.getSelectedTaskId(), "task-11");
 });
@@ -990,7 +1041,6 @@ test("browser resets details when the selected task disappears", () => {
 		(target) => { targets.push(target); },
 	);
 
-	browser.handleInput("d");
 	browser.render(40);
 	browser.handleInput("j");
 	state = { ...state, tasks: state.tasks.filter((task) => task.id !== "second") };
