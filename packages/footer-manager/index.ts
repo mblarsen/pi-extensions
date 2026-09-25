@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { Usage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -42,6 +42,12 @@ type FooterSnapshot = {
 	model: string;
 };
 
+type UsageEntryLike = {
+	type: string;
+	usage?: Usage;
+	message?: { role: string; usage?: Usage };
+};
+
 type FooterTheme = {
 	fg(color: string, text: string): string;
 	bold(text: string): string;
@@ -77,17 +83,65 @@ function cloneLayout(layout: FooterLayoutLine[]): FooterLayoutLine[] {
 	return layout.map((line) => ({ left: line.left, right: line.right }));
 }
 
+export function formatTokens(value: number): string {
+	if (value < 1_000) return `${value}`;
+	if (value < 10_000) return `${(value / 1_000).toFixed(1)}k`;
+	if (value < 1_000_000) return `${Math.round(value / 1_000)}k`;
+	if (value < 10_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+	return `${Math.round(value / 1_000_000)}M`;
+}
+
+export function formatBuiltinStats(
+	entries: readonly UsageEntryLike[],
+	contextUsage: { contextWindow: number; percent: number | null } | undefined,
+	modelContextWindow: number,
+	usingSubscription: boolean,
+): string {
+	let totalInput = 0;
+	let totalOutput = 0;
+	let totalCacheRead = 0;
+	let totalCacheWrite = 0;
+	let totalCost = 0;
+	let latestCacheHitRate: number | undefined;
+
+	for (const entry of entries) {
+		let usage: Usage | undefined;
+		if (entry.type === "usage") usage = entry.usage;
+		else if (entry.type === "message" && (entry.message?.role === "assistant" || entry.message?.role === "toolResult")) {
+			usage = entry.message.usage;
+			if (entry.message.role === "assistant" && usage) {
+				const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+				latestCacheHitRate = promptTokens > 0 ? (usage.cacheRead / promptTokens) * 100 : undefined;
+			}
+		} else if (entry.type === "branch_summary" || entry.type === "compaction") usage = entry.usage;
+
+		if (!usage) continue;
+		totalInput += usage.input;
+		totalOutput += usage.output;
+		totalCacheRead += usage.cacheRead;
+		totalCacheWrite += usage.cacheWrite;
+		totalCost += usage.cost.total;
+	}
+
+	const parts: string[] = [];
+	if (totalInput) parts.push(`↑${formatTokens(totalInput)}`);
+	if (totalOutput) parts.push(`↓${formatTokens(totalOutput)}`);
+	if (totalCacheRead) parts.push(`R${formatTokens(totalCacheRead)}`);
+	if (totalCacheWrite) parts.push(`W${formatTokens(totalCacheWrite)}`);
+	if ((totalCacheRead || totalCacheWrite) && latestCacheHitRate !== undefined) parts.push(`CH${latestCacheHitRate.toFixed(1)}%`);
+	if (totalCost || usingSubscription) parts.push(`$${totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
+
+	const contextWindow = contextUsage?.contextWindow ?? modelContextWindow;
+	const contextPercent = contextUsage?.percent === null ? "?" : `${(contextUsage?.percent ?? 0).toFixed(1)}%`;
+	parts.push(`${contextPercent}/${formatTokens(contextWindow)} (auto)`);
+	return parts.join(" ");
+}
+
 export default function (pi: ExtensionAPI) {
 	let state: FooterManagerState = { ...DEFAULT_STATE, order: [...DEFAULT_ORDER], layout: cloneLayout(DEFAULT_LAYOUT), unplaced: [] };
 	let footerDataRef: FooterDataRef | undefined;
 	let footerApplied = false;
 	let requestFooterRender: (() => void) | undefined;
-
-	function formatTokens(value: number): string {
-		if (value < 1000) return `${value}`;
-		if (value < 1_000_000) return `${(value / 1000).toFixed(1)}k`;
-		return `${(value / 1_000_000).toFixed(1)}M`;
-	}
 
 	function formatCwd(value: string): string {
 		const home = process.env.HOME || process.env.USERPROFILE;
@@ -363,46 +417,27 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function buildFooterSnapshot(ctx: ExtensionContext, footerData: FooterDataRef): FooterSnapshot {
-		let totalInput = 0;
-		let totalOutput = 0;
-		let totalCacheRead = 0;
-		let totalCacheWrite = 0;
-		let totalCost = 0;
-
-		for (const entry of ctx.sessionManager.getEntries()) {
-			if (entry.type === "message" && entry.message.role === "assistant") {
-				const message = entry.message as AssistantMessage;
-				totalInput += message.usage.input;
-				totalOutput += message.usage.output;
-				totalCacheRead += message.usage.cacheRead;
-				totalCacheWrite += message.usage.cacheWrite;
-				totalCost += message.usage.cost.total;
-			}
-		}
-
 		let cwd = formatCwd(ctx.sessionManager.getCwd());
 		const branch = footerData.getGitBranch();
 		if (branch) cwd += ` (${branch})`;
 		const sessionName = ctx.sessionManager.getSessionName() ?? "";
-
-		const statsParts: string[] = [];
-		if (totalInput) statsParts.push(`↑${formatTokens(totalInput)}`);
-		if (totalOutput) statsParts.push(`↓${formatTokens(totalOutput)}`);
-		if (totalCacheRead) statsParts.push(`R${formatTokens(totalCacheRead)}`);
-		if (totalCacheWrite) statsParts.push(`W${formatTokens(totalCacheWrite)}`);
-		if (totalCost) statsParts.push(`$${totalCost.toFixed(3)}`);
-
-		const contextUsage = ctx.getContextUsage();
-		if (contextUsage) {
-			statsParts.push(`${contextUsage.percent?.toFixed(1) ?? "?"}%/${formatTokens(contextUsage.contextWindow)}`);
-		}
-
 		const modelId = ctx.model?.id || "no-model";
 		const providerPrefix = footerData.getAvailableProviderCount() > 1 && ctx.model ? `(${ctx.model.provider}) ` : "";
+		const usingSubscription = ctx.model
+			? ctx.model.provider === "kimi-coding" || (
+				ctx.modelRegistry.isUsingOAuth(ctx.model) &&
+				ctx.modelRegistry.getProvider(ctx.model.provider)?.auth.oauth?.isSubscription === true
+			)
+			: false;
 		return {
 			cwd,
 			sessionName,
-			stats: statsParts.join(" "),
+			stats: formatBuiltinStats(
+				ctx.sessionManager.getEntries() as UsageEntryLike[],
+				ctx.getContextUsage(),
+				ctx.model?.contextWindow ?? 0,
+				usingSubscription,
+			),
 			model: `${providerPrefix}${modelId}`,
 		};
 	}
