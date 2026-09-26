@@ -57,6 +57,18 @@ test("manager keeps discovered keys in holding across reloads until placed or hi
 	renderFooter(120);
 	await command.handler("", ctx);
 	assert.ok(renderManager);
+	for (const width of [80, 120, 200]) {
+		const lines = renderManager(width);
+		const controls = lines.findIndex((line) => line.includes("Controls"));
+		assert.doesNotMatch(lines.join("\n"), /Details|reading position|Move:/);
+		assert.match(lines.slice(controls).join("\n"), /u move up.*d move down in layout/);
+		assert.match(lines[1], /^│ Footer manager/);
+		assert.match(lines[controls + 1], /select/);
+		assert.match(lines.at(-2)!, /esc close/);
+		const items = lines.findIndex((line) => line.includes("Layout items"));
+		assert.match(lines[items + 1], /builtin\..*row 1 left/);
+		assert.ok(lines.every((line) => [...line].length === width));
+	}
 	const output = renderManager(120).join("\n");
 	assert.match(output, /first-status.*unplaced/);
 	assert.match(output, /overflow-status.*unplaced/);

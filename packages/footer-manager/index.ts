@@ -791,16 +791,6 @@ export default function (pi: ExtensionAPI) {
 					const statuses = footerDataRef?.getExtensionStatuses() ?? new Map<string, string>();
 					const refs = getLayoutItems(getEffectiveLayout(statuses), getEffectiveOrder(statuses));
 					const placedKeys = new Set(refs.map((item) => item.key));
-					const selectedKey = keys[selectedIndex];
-					const selectedPosition = selectedKey ? keys.indexOf(selectedKey) + 1 : 0;
-					const selectedHidden = selectedKey ? isRenderedHidden(selectedKey) : false;
-					const selectedState = state.zenEnabled
-						? theme.fg("warning", "hidden by zen")
-						: selectedHidden
-							? theme.fg("warning", "hidden")
-							: selectedKey && !placedKeys.has(selectedKey)
-								? theme.fg("warning", "unplaced")
-								: theme.fg("success", "visible");
 					const snapshot = footerDataRef ? buildFooterSnapshot(ctx, footerDataRef) : undefined;
 					const hiddenCount = keys.filter(isRenderedHidden).length;
 					const unplacedCount = keys.filter((key) => !isRenderedHidden(key) && !placedKeys.has(key)).length;
@@ -828,7 +818,7 @@ export default function (pi: ExtensionAPI) {
 							const marker = isSelected ? theme.fg("accent", "›") : theme.fg("dim", " ");
 							const badge = isRenderedHidden(key) ? theme.fg("warning", state.zenEnabled ? "ZEN" : "OFF") : theme.fg("success", " ON");
 							const source = isBuiltinKey(key) ? theme.fg("accent", "built-in") : theme.fg("dim", "ext");
-							const layoutInfo = isHidden(key) ? "unknown" : ref ? `line ${ref.lineIndex + 1} ${ref.side}` : "unplaced";
+							const layoutInfo = isHidden(key) ? "unknown" : ref ? `row ${ref.lineIndex + 1} ${ref.side}` : "unplaced";
 							const isFlashing = flashKey === key && flashFrame % 2 === 0;
 							const side = isFlashing ? theme.fg("warning", theme.bold(layoutInfo)) : isSelected ? layoutInfo : theme.fg("dim", layoutInfo);
 							const preview = snapshot ? getItemText(key, snapshot, statuses) : undefined;
@@ -838,17 +828,9 @@ export default function (pi: ExtensionAPI) {
 						}
 					}
 
-					lines.push(sectionBorder("Details", safeWidth));
-					if (!selectedKey) {
-						lines.push(frameLine(theme.fg("dim", "Select a footer item to inspect it."), safeWidth));
-					} else {
-						lines.push(frameLine(`Key: ${theme.bold(selectedKey)} ${theme.fg("dim", `• ${isBuiltinKey(selectedKey) ? "built-in" : "extension"}`)}`, safeWidth));
-						lines.push(frameLine(`State: ${selectedState} ${theme.fg("dim", `• reading position ${selectedPosition} of ${keys.length}`)}`, safeWidth));
-						lines.push(frameLine(`Move: ${theme.fg("dim", "u/d moves through reading order")}`, safeWidth));
-					}
-
 					lines.push(sectionBorder("Controls", safeWidth));
-					lines.push(frameLine(theme.fg("dim", "↑↓/j/k select  •  space/enter toggle  •  u/d move item"), safeWidth));
+					lines.push(frameLine(theme.fg("dim", "↑↓/j/k select  •  space/enter toggle"), safeWidth));
+					lines.push(frameLine(theme.fg("dim", "u move up  •  d move down in layout"), safeWidth));
 					lines.push(frameLine(theme.fg("dim", "e edit layout  •  s status items  •  r reset  •  esc close"), safeWidth));
 					lines.push(border("└", "─", "┘", safeWidth));
 
