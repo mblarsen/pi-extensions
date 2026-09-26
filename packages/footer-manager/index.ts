@@ -142,6 +142,8 @@ export default function (pi: ExtensionAPI) {
 	let footerDataRef: FooterDataRef | undefined;
 	let footerApplied = false;
 	let requestFooterRender: (() => void) | undefined;
+	let pendingSave: Promise<void> = Promise.resolve();
+	let reportSaveError = (error: unknown) => console.error("footer-manager could not save discovered keys:", error);
 
 	function formatCwd(value: string): string {
 		const home = process.env.HOME || process.env.USERPROFILE;
@@ -320,19 +322,18 @@ export default function (pi: ExtensionAPI) {
 		const data = raw as StoredFooterManagerState;
 		let repaired = false;
 		const hidden = readStringArray(data.hidden) ?? (data.hidden === undefined ? [] : (repaired = true, []));
-		const legacyUnplaced = readStringArray(data.unplaced) ?? (data.unplaced === undefined ? [] : (repaired = true, []));
+		const unplaced = readStringArray(data.unplaced) ?? (data.unplaced === undefined ? [] : (repaired = true, []));
 		const storedOrder = readOrderArray(data.order) ?? (data.order === undefined ? [] : (repaired = true, []));
 		const normalizedLayout = normalizeLayout(data.layout);
 		const order = normalizedLayout?.order ?? (storedOrder.length > 0 ? storedOrder : [...DEFAULT_ORDER]);
-		const migratedOrder = [...order, ...legacyUnplaced.filter((key) => !compactOrder(order).includes(key))];
-		const layout = normalizedLayout?.layout ?? ensureLayoutPositions(cloneLayout(DEFAULT_LAYOUT), migratedOrder.length);
+		const layout = normalizedLayout?.layout ?? ensureLayoutPositions(cloneLayout(DEFAULT_LAYOUT), order.length);
 		if (!normalizedLayout && data.layout !== undefined) repaired = true;
-		if (normalizedLayout?.order || legacyUnplaced.length > 0) repaired = true;
+		if (normalizedLayout?.order) repaired = true;
 
 		const hiddenKeys = new Set(hidden);
 		const groupedOrder = data.orderMode === "slot-groups";
-		const groups = getSlotGroups(layout, migratedOrder, groupedOrder).map((group) => group.filter((item) => !hiddenKeys.has(item)));
-		if (!groupedOrder || groups.flat().length !== compactOrder(migratedOrder).filter((item) => !hiddenKeys.has(item)).length) repaired = true;
+		const groups = getSlotGroups(layout, order, groupedOrder).map((group) => group.filter((item) => !hiddenKeys.has(item)));
+		if (!groupedOrder || groups.flat().length !== compactOrder(order).filter((item) => !hiddenKeys.has(item)).length) repaired = true;
 
 		return {
 			state: {
@@ -341,7 +342,8 @@ export default function (pi: ExtensionAPI) {
 				order: encodeSlotGroups(groups),
 				orderMode: "slot-groups",
 				layout,
-				unplaced: [],
+				unplaced: uniqueKeys([...unplaced, ...compactOrder(order)])
+					.filter((key) => !hiddenKeys.has(key) && !groups.flat().includes(key)),
 				renderStatusLine: typeof data.renderStatusLine === "boolean" ? data.renderStatusLine : DEFAULT_STATE.renderStatusLine,
 				zenEnabled: typeof data.zenEnabled === "boolean" ? data.zenEnabled : DEFAULT_STATE.zenEnabled,
 			},
@@ -357,13 +359,22 @@ export default function (pi: ExtensionAPI) {
 
 	async function readSettings(): Promise<Record<string, unknown>> {
 		try {
-			return JSON.parse(await readFile(getSettingsPath(), "utf8")) as Record<string, unknown>;
-		} catch {
-			return {};
+			const settings: unknown = JSON.parse(await readFile(getSettingsPath(), "utf8"));
+			if (!isRecord(settings)) throw new Error("Pi settings must be a JSON object");
+			return settings;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+			throw error;
 		}
 	}
 
-	async function saveState(): Promise<void> {
+	function saveState(): Promise<void> {
+		const save = pendingSave.then(writeState);
+		pendingSave = save.catch(() => {});
+		return save;
+	}
+
+	async function writeState(): Promise<void> {
 		const settingsPath = getSettingsPath();
 		const settings = await readSettings();
 		settings[SETTINGS_KEY] = {
@@ -381,6 +392,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	async function loadState(): Promise<void> {
+		await pendingSave;
 		const settings = await readSettings();
 		const result = normalizeState(settings[SETTINGS_KEY]);
 		state = result.state;
@@ -389,14 +401,19 @@ export default function (pi: ExtensionAPI) {
 
 	function buildKnownKeys(statuses?: ReadonlyMap<string, string>): string[] {
 		const current = statuses ? Array.from(statuses.keys()) : footerDataRef ? Array.from(footerDataRef.getExtensionStatuses().keys()) : [];
-		return uniqueKeys([...BUILTIN_KEYS, ...compactOrder(state.order), ...state.hidden, ...state.unplaced, ...current]);
+		const known = uniqueKeys([...BUILTIN_KEYS, ...compactOrder(state.order), ...state.hidden, ...state.unplaced]);
+		const discovered = uniqueKeys(current).filter((key) => !known.includes(key));
+		if (discovered.length > 0) {
+			state.unplaced.push(...discovered);
+			void saveState().catch(reportSaveError);
+		}
+		return [...known, ...discovered];
 	}
 
 	function getEffectiveOrder(statuses: ReadonlyMap<string, string>): FooterOrderItem[] {
-		const known = new Set([...compactOrder(state.order), ...state.hidden, ...state.unplaced]);
-		const newExtensionKeys = Array.from(statuses.keys()).map(migrateKey).filter((key) => !known.has(key));
+		buildKnownKeys(statuses);
 		const groups = getSlotGroups(state.layout, state.order);
-		for (const key of newExtensionKeys) {
+		for (const key of state.unplaced) {
 			const emptyGroup = groups.find((group) => group.length === 0);
 			if (emptyGroup) emptyGroup.push(key);
 		}
@@ -414,6 +431,7 @@ export default function (pi: ExtensionAPI) {
 		if (!targetGroup) return;
 		targetGroup.push(key);
 		setSlotGroups(groups);
+		state.unplaced = state.unplaced.filter((item) => item !== key);
 	}
 
 	function buildFooterSnapshot(ctx: ExtensionContext, footerData: FooterDataRef): FooterSnapshot {
@@ -457,6 +475,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function applyFooter(ctx: ExtensionContext): void {
+		reportSaveError = (error) => ctx.ui.notify(`footer-manager could not save discovered keys: ${error instanceof Error ? error.message : String(error)}`, "error");
 		if (!state.enabled) {
 			ctx.ui.setFooter(undefined);
 			footerApplied = false;
@@ -538,7 +557,7 @@ export default function (pi: ExtensionAPI) {
 		const ordered = compactOrder(getEffectiveOrder(statuses));
 		const visible = ordered.filter((key) => !isHidden(key));
 		const hidden = uniqueKeys([...ordered.filter((key) => isHidden(key)), ...state.hidden]);
-		return uniqueKeys([...visible, ...hidden]);
+		return uniqueKeys([...visible, ...buildKnownKeys(statuses).filter((key) => !isHidden(key)), ...hidden]);
 	}
 
 	function toggleFooterKey(key: string): boolean | undefined {
@@ -551,6 +570,7 @@ export default function (pi: ExtensionAPI) {
 			? uniqueKeys([...state.hidden, normalizedKey])
 			: state.hidden.filter((item) => item !== normalizedKey);
 
+		state.unplaced = state.unplaced.filter((item) => item !== normalizedKey);
 		if (nextHidden) setSlotGroups(getSlotGroups(state.layout, state.order).map((group) => group.filter((item) => item !== normalizedKey)));
 		if (!nextHidden) {
 			if (!compactOrder(state.order).includes(normalizedKey)) placeKeyAtEnd(normalizedKey);
@@ -610,7 +630,7 @@ export default function (pi: ExtensionAPI) {
 		state.layout = cloneLayout(nextLayout);
 		setSlotGroups(nextGroups);
 		state.hidden = uniqueKeys([...state.hidden, ...removed]);
-		state.unplaced = [];
+		state.unplaced = state.unplaced.filter((key) => !state.hidden.includes(key) && !compactOrder(state.order).includes(key));
 	}
 
 	async function openLayoutEditor(ctx: ExtensionContext): Promise<void> {
@@ -744,6 +764,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				state.layout = layout;
 				setSlotGroups(groups);
+				state.unplaced = state.unplaced.filter((item) => !compactOrder(state.order).includes(item));
 				ensureKeys();
 				selectedIndex = keys.indexOf(key);
 				flashLocation(key);
@@ -756,7 +777,8 @@ export default function (pi: ExtensionAPI) {
 			};
 
 			const reset = async () => {
-				state = { ...DEFAULT_STATE, enabled: state.enabled, order: [...DEFAULT_ORDER], layout: cloneLayout(DEFAULT_LAYOUT), unplaced: [] };
+				const unplaced = buildKnownKeys().filter((key) => !isBuiltinKey(key));
+				state = { ...DEFAULT_STATE, enabled: state.enabled, order: [...DEFAULT_ORDER], layout: cloneLayout(DEFAULT_LAYOUT), unplaced };
 				setSlotGroups(orderToSlotGroups(state.layout, state.order));
 				ensureKeys();
 				await persistAndRefresh();
@@ -767,6 +789,8 @@ export default function (pi: ExtensionAPI) {
 					ensureKeys();
 					const safeWidth = width;
 					const statuses = footerDataRef?.getExtensionStatuses() ?? new Map<string, string>();
+					const refs = getLayoutItems(getEffectiveLayout(statuses), getEffectiveOrder(statuses));
+					const placedKeys = new Set(refs.map((item) => item.key));
 					const selectedKey = keys[selectedIndex];
 					const selectedPosition = selectedKey ? keys.indexOf(selectedKey) + 1 : 0;
 					const selectedHidden = selectedKey ? isRenderedHidden(selectedKey) : false;
@@ -774,11 +798,13 @@ export default function (pi: ExtensionAPI) {
 						? theme.fg("warning", "hidden by zen")
 						: selectedHidden
 							? theme.fg("warning", "hidden")
-							: theme.fg("success", "visible");
+							: selectedKey && !placedKeys.has(selectedKey)
+								? theme.fg("warning", "unplaced")
+								: theme.fg("success", "visible");
 					const snapshot = footerDataRef ? buildFooterSnapshot(ctx, footerDataRef) : undefined;
-					const visibleCount = keys.filter((key) => !isRenderedHidden(key)).length;
-					const hiddenCount = keys.length - visibleCount;
-					const unplacedCount = state.unplaced.length;
+					const hiddenCount = keys.filter(isRenderedHidden).length;
+					const unplacedCount = keys.filter((key) => !isRenderedHidden(key) && !placedKeys.has(key)).length;
+					const visibleCount = keys.length - hiddenCount - unplacedCount;
 
 					const lines = [
 						border("┌", "─", "┐", safeWidth),
@@ -795,7 +821,6 @@ export default function (pi: ExtensionAPI) {
 					if (keys.length === 0) {
 						lines.push(frameLine(theme.fg("warning", "No placed footer items. Press e to edit layout."), safeWidth));
 					} else {
-						const refs = getLayoutItems(getEffectiveLayout(statuses), getEffectiveOrder(statuses));
 						for (let index = 0; index < keys.length; index++) {
 							const key = keys[index];
 							const ref = refs.find((item) => item.key === key);
@@ -903,7 +928,8 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (command === "reset") {
-				state = { ...DEFAULT_STATE, enabled: state.enabled, order: [...DEFAULT_ORDER], layout: cloneLayout(DEFAULT_LAYOUT), unplaced: [] };
+				const unplaced = buildKnownKeys().filter((key) => !isBuiltinKey(key));
+				state = { ...DEFAULT_STATE, enabled: state.enabled, order: [...DEFAULT_ORDER], layout: cloneLayout(DEFAULT_LAYOUT), unplaced };
 				setSlotGroups(orderToSlotGroups(state.layout, state.order));
 				await saveState();
 				applyFooter(ctx);
@@ -982,6 +1008,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		await pendingSave;
 		footerDataRef = undefined;
 		footerApplied = false;
 		requestFooterRender = undefined;

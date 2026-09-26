@@ -32,6 +32,8 @@ pi install npm:@mblarsen/pi-footer-manager
 **Interactive controls** (inside the manager overlay):
 - **↑↓/j/k** select item · **Space/Enter** toggle visibility · **u/d** move through reading order · **e** edit layout · **r** reset · **Esc** close
 - Off items are listed at the bottom and shown with an unknown layout position.
+- Discovered status keys remain in `footerManager.unplaced` in Pi settings until placed or hidden. They remain selectable after reload, even without current status text.
+- Reset restores the default layout but retains discovered keys. Keys must be observed at least once to be remembered.
 
 ## Layout editor
 
