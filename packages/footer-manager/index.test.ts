@@ -1,28 +1,47 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import footerManager, { formatBuiltinStats, formatTokens } from "./index.ts";
 
-test("manager lists status keys even when no layout slots remain", async () => {
+test("manager keeps discovered keys in holding across reloads until placed or hidden", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "footer-manager-"));
+	const previousHome = process.env.HOME;
+	process.env.HOME = home;
+	t.after(async () => {
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+		await rm(home, { recursive: true, force: true });
+	});
+	const settingsPath = join(home, ".pi", "agent", "settings.json");
 	let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
-	footerManager({
+	const events = new Map<string, Function>();
+	const createExtension = () => footerManager({
 		registerCommand(_name, options) { command = options; },
-		on() { return () => {}; },
+		on(name, handler) { events.set(name, handler); return () => {}; },
 	} satisfies Pick<ExtensionAPI, "registerCommand" | "on"> as unknown as ExtensionAPI);
+	createExtension();
 	const statuses = new Map([["first-status", "First"], ["overflow-status", "Overflow"]]);
 	const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 	const tui = { requestRender() {} };
 	let renderManager: ((width: number) => string[]) | undefined;
+	let renderFooter: ((width: number) => string[]) | undefined;
+	const errors: string[] = [];
 	const ctx = {
 		ui: {
-			setFooter(factory: Function) {
-				factory(tui, theme, {
+			notify(message: string, level: string) { if (level === "error") errors.push(message); },
+			setFooter(factory: Function | undefined) {
+				if (!factory) return;
+				const footer = factory(tui, theme, {
 					getExtensionStatuses: () => statuses,
 					getGitBranch: () => null,
 					getAvailableProviderCount: () => 0,
 					onBranchChange: () => () => {},
 				});
+				renderFooter = (width) => footer.render(width);
 			},
 			async custom(factory: Function) {
 				const manager = factory(tui, theme, {}, () => {});
@@ -33,6 +52,9 @@ test("manager lists status keys even when no layout slots remain", async () => {
 		getContextUsage: () => undefined,
 	} as unknown as ExtensionCommandContext;
 	assert.ok(command);
+	await events.get("session_start")!({}, ctx);
+	assert.ok(renderFooter);
+	renderFooter(120);
 	await command.handler("", ctx);
 	assert.ok(renderManager);
 	const output = renderManager(120).join("\n");
@@ -41,6 +63,31 @@ test("manager lists status keys even when no layout slots remain", async () => {
 	assert.match(output, /4 visible.*0 hidden.*2 unplaced/);
 	statuses.set("late-status", "Late");
 	assert.match(renderManager(120).join("\n"), /late-status.*unplaced/);
+	await events.get("session_shutdown")!({}, ctx);
+	const stored = JSON.parse(await readFile(settingsPath, "utf8"));
+	assert.deepEqual(stored.footerManager.unplaced, [...statuses.keys()]);
+
+	statuses.clear();
+	createExtension();
+	await events.get("session_start")!({}, ctx);
+	await command.handler("", ctx);
+	assert.match(renderManager(120).join("\n"), /overflow-status.*unplaced/);
+	assert.match(renderManager(120).join("\n"), /no current text/);
+	await command.handler("ext overflow-status", ctx);
+	await command.handler("ext overflow-status", ctx);
+	await command.handler("ext first-status", ctx);
+	const placed = JSON.parse(await readFile(settingsPath, "utf8"));
+	assert.deepEqual(placed.footerManager.unplaced, ["late-status"]);
+	assert.ok(placed.footerManager.order.includes("overflow-status"));
+	assert.ok(placed.footerManager.hidden.includes("first-status"));
+
+	await command.handler("reset", ctx);
+	assert.match(renderManager(120).join("\n"), /late-status/);
+	await events.get("session_shutdown")!({}, ctx);
+	assert.deepEqual(errors, []);
+	await writeFile(settingsPath, "invalid json");
+	await assert.rejects(command.handler("status-line on", ctx));
+	assert.equal(await readFile(settingsPath, "utf8"), "invalid json");
 });
 
 function usage(values: Partial<Omit<Usage, "cost">> & { cost?: Partial<Usage["cost"]> }): Usage {
