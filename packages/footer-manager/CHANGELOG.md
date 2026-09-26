@@ -1,5 +1,11 @@
 # @mblarsen/pi-footer-manager
 
+## 0.1.4
+
+### Patch Changes
+
+- 4bd4e66: Always show the provider before the model in `builtin.model`, including when only one provider is available.
+
 ## 0.1.3
 
 ### Patch Changes
