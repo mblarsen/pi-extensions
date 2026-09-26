@@ -440,7 +440,7 @@ export default function (pi: ExtensionAPI) {
 		if (branch) cwd += ` (${branch})`;
 		const sessionName = ctx.sessionManager.getSessionName() ?? "";
 		const modelId = ctx.model?.id || "no-model";
-		const providerPrefix = footerData.getAvailableProviderCount() > 1 && ctx.model ? `(${ctx.model.provider}) ` : "";
+		const providerPrefix = ctx.model ? `(${ctx.model.provider}) ` : "";
 		const usingSubscription = ctx.model
 			? ctx.model.provider === "kimi-coding" || (
 				ctx.modelRegistry.isUsingOAuth(ctx.model) &&

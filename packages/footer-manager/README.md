@@ -58,7 +58,7 @@ x
 - **builtin.cwd** — working directory (with git branch)
 - **builtin.session** — session name
 - **builtin.stats** — token counts, cost, context usage
-- **builtin.model** — active model name
+- **builtin.model** — provider and active model name, for example `(9router) cx/gpt-6-astra`
 - **Extension status items** — any status text registered by other extensions
 
 ## Similar work

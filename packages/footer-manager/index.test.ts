@@ -38,7 +38,7 @@ test("manager keeps discovered keys in holding across reloads until placed or hi
 				const footer = factory(tui, theme, {
 					getExtensionStatuses: () => statuses,
 					getGitBranch: () => null,
-					getAvailableProviderCount: () => 0,
+					getAvailableProviderCount: () => 1,
 					onBranchChange: () => () => {},
 				});
 				renderFooter = (width) => footer.render(width);
@@ -54,7 +54,11 @@ test("manager keeps discovered keys in holding across reloads until placed or hi
 	assert.ok(command);
 	await events.get("session_start")!({}, ctx);
 	assert.ok(renderFooter);
-	renderFooter(120);
+	assert.match(renderFooter(120).join("\n"), /no-model/);
+	ctx.model = { id: "cx/gpt-6-astra", provider: "9router" } as NonNullable<typeof ctx.model>;
+	ctx.modelRegistry = { isUsingOAuth: () => false } as unknown as typeof ctx.modelRegistry;
+	assert.match(renderFooter(120).join("\n"), /\(9router\) cx\/gpt-6-astra/);
+	ctx.model = undefined;
 	await command.handler("", ctx);
 	assert.ok(renderManager);
 	for (const width of [80, 120, 200]) {
