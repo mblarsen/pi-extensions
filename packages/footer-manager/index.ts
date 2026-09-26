@@ -538,7 +538,7 @@ export default function (pi: ExtensionAPI) {
 		const ordered = compactOrder(getEffectiveOrder(statuses));
 		const visible = ordered.filter((key) => !isHidden(key));
 		const hidden = uniqueKeys([...ordered.filter((key) => isHidden(key)), ...state.hidden]);
-		return uniqueKeys([...visible, ...hidden]);
+		return uniqueKeys([...visible, ...buildKnownKeys(statuses).filter((key) => !isHidden(key)), ...hidden]);
 	}
 
 	function toggleFooterKey(key: string): boolean | undefined {
@@ -767,6 +767,8 @@ export default function (pi: ExtensionAPI) {
 					ensureKeys();
 					const safeWidth = width;
 					const statuses = footerDataRef?.getExtensionStatuses() ?? new Map<string, string>();
+					const refs = getLayoutItems(getEffectiveLayout(statuses), getEffectiveOrder(statuses));
+					const placedKeys = new Set(refs.map((item) => item.key));
 					const selectedKey = keys[selectedIndex];
 					const selectedPosition = selectedKey ? keys.indexOf(selectedKey) + 1 : 0;
 					const selectedHidden = selectedKey ? isRenderedHidden(selectedKey) : false;
@@ -774,11 +776,13 @@ export default function (pi: ExtensionAPI) {
 						? theme.fg("warning", "hidden by zen")
 						: selectedHidden
 							? theme.fg("warning", "hidden")
-							: theme.fg("success", "visible");
+							: selectedKey && !placedKeys.has(selectedKey)
+								? theme.fg("warning", "unplaced")
+								: theme.fg("success", "visible");
 					const snapshot = footerDataRef ? buildFooterSnapshot(ctx, footerDataRef) : undefined;
-					const visibleCount = keys.filter((key) => !isRenderedHidden(key)).length;
-					const hiddenCount = keys.length - visibleCount;
-					const unplacedCount = state.unplaced.length;
+					const hiddenCount = keys.filter(isRenderedHidden).length;
+					const unplacedCount = keys.filter((key) => !isRenderedHidden(key) && !placedKeys.has(key)).length;
+					const visibleCount = keys.length - hiddenCount - unplacedCount;
 
 					const lines = [
 						border("┌", "─", "┐", safeWidth),
@@ -795,7 +799,6 @@ export default function (pi: ExtensionAPI) {
 					if (keys.length === 0) {
 						lines.push(frameLine(theme.fg("warning", "No placed footer items. Press e to edit layout."), safeWidth));
 					} else {
-						const refs = getLayoutItems(getEffectiveLayout(statuses), getEffectiveOrder(statuses));
 						for (let index = 0; index < keys.length; index++) {
 							const key = keys[index];
 							const ref = refs.find((item) => item.key === key);

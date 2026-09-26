@@ -1,7 +1,47 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Usage } from "@earendil-works/pi-ai";
-import { formatBuiltinStats, formatTokens } from "./index.ts";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import footerManager, { formatBuiltinStats, formatTokens } from "./index.ts";
+
+test("manager lists status keys even when no layout slots remain", async () => {
+	let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+	footerManager({
+		registerCommand(_name, options) { command = options; },
+		on() { return () => {}; },
+	} satisfies Pick<ExtensionAPI, "registerCommand" | "on"> as unknown as ExtensionAPI);
+	const statuses = new Map([["first-status", "First"], ["overflow-status", "Overflow"]]);
+	const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+	const tui = { requestRender() {} };
+	let renderManager: ((width: number) => string[]) | undefined;
+	const ctx = {
+		ui: {
+			setFooter(factory: Function) {
+				factory(tui, theme, {
+					getExtensionStatuses: () => statuses,
+					getGitBranch: () => null,
+					getAvailableProviderCount: () => 0,
+					onBranchChange: () => () => {},
+				});
+			},
+			async custom(factory: Function) {
+				const manager = factory(tui, theme, {}, () => {});
+				renderManager = (width) => manager.render(width);
+			},
+		},
+		sessionManager: { getCwd: () => "/test", getSessionName: () => "", getEntries: () => [] },
+		getContextUsage: () => undefined,
+	} as unknown as ExtensionCommandContext;
+	assert.ok(command);
+	await command.handler("", ctx);
+	assert.ok(renderManager);
+	const output = renderManager(120).join("\n");
+	assert.match(output, /first-status.*unplaced/);
+	assert.match(output, /overflow-status.*unplaced/);
+	assert.match(output, /4 visible.*0 hidden.*2 unplaced/);
+	statuses.set("late-status", "Late");
+	assert.match(renderManager(120).join("\n"), /late-status.*unplaced/);
+});
 
 function usage(values: Partial<Omit<Usage, "cost">> & { cost?: Partial<Usage["cost"]> }): Usage {
 	return {
