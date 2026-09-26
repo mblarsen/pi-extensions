@@ -1,5 +1,11 @@
 # @mblarsen/pi-footer-manager
 
+## 0.1.3
+
+### Patch Changes
+
+- e28d1e3: Remove the redundant Details section, show layout movement shortcuts in Controls, and label footer positions as rows.
+
 ## 0.1.2
 
 ### Patch Changes
