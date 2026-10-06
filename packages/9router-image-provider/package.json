@@ -1,0 +1,25 @@
+{
+  "name": "@mblarsen/pi-9router-image-provider",
+  "version": "0.1.0",
+  "description": "Use 9Router image models through Pi's native codemode image API.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": ["pi-package", "pi-extension"],
+  "files": ["index.ts", "provider.ts", "README.md"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mblarsen/pi-extensions.git",
+    "directory": "packages/9router-image-provider"
+  },
+  "publishConfig": { "access": "public" },
+  "pi": { "extensions": ["./index.ts"] },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^1.0.4",
+    "@earendil-works/pi-coding-agent": "^1.0.4"
+  },
+  "author": "Michael Bøcker-Larsen"
+}

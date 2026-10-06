@@ -6,6 +6,7 @@ Independent npm packages for the [Pi coding agent](https://github.com/earendil-w
 
 | Package | Description |
 |---|---|
+| [`@mblarsen/pi-9router-image-provider`](packages/9router-image-provider/) | Generate images through native codemode with a 9Router service. |
 | [`@mblarsen/pi-burn-more-tokens`](packages/burn-more-tokens/) | Send successful-run messages to AWTRIX and macOS speech. |
 | [`@mblarsen/pi-continue-from`](packages/continue-from/) | Resume or nudge a stalled conversation. |
 | [`@mblarsen/pi-ferd`](packages/ferd/) | Fork Pi into a Herdr pane and merge the session later. |
