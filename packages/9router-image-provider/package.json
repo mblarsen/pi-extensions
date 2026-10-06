@@ -1,6 +1,6 @@
 {
   "name": "@mblarsen/pi-9router-image-provider",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Use 9Router image models through Pi's native codemode image API.",
   "license": "MIT",
   "type": "module",
