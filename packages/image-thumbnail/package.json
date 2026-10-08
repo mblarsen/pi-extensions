@@ -1,6 +1,6 @@
 {
   "name": "@mblarsen/pi-image-thumbnail",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Brief clipboard image previews above the Pi editor.",
   "license": "MIT",
   "type": "module",
