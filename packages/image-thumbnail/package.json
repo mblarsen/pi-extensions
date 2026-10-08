@@ -1,0 +1,22 @@
+{
+  "name": "@mblarsen/pi-image-thumbnail",
+  "version": "0.1.0",
+  "description": "Brief clipboard image previews above the Pi editor.",
+  "license": "MIT",
+  "type": "module",
+  "author": "Michael Bøcker-Larsen",
+  "keywords": ["pi-package", "pi-extension"],
+  "files": ["index.ts", "core.ts", "thumbnail.ts", "README.md"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mblarsen/pi-extensions.git",
+    "directory": "packages/image-thumbnail"
+  },
+  "publishConfig": { "access": "public" },
+  "pi": { "extensions": ["./index.ts"] },
+  "dependencies": { "@silvia-odwyer/photon-node": "0.3.4" },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}
