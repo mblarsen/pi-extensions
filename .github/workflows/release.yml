@@ -33,4 +33,5 @@ jobs:
       - uses: changesets/action@v2.1.1
         if: steps.npm-packages.outputs.ready == 'true'
         with:
+          version-script: npm run changeset:version
           publish-script: npm run release
