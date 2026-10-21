@@ -1,4 +1,4 @@
-# @mblarsen/pi-assistant-jump
+# @mblarsen/pi-message-jump
 
 Jump the fullscreen transcript to the previous or next message.
 
@@ -9,7 +9,7 @@ when the turn made no tool calls. Replies produced while tools run, and the
 final reply after a steer, are therefore skipped.
 
 This extension does its own row maths over the live transcript component tree,
-so it lands on every reply, and it lands on the **text** rather than on the top
+so it lands on every message, and it lands on the **text** rather than on the top
 of the message. Turns that only thought or only called tools have no reply to
 read, so they are not stops. Your own prompts are stops as well: in a
 tool-heavy session most assistant turns carry no prose, and the prompts are what
@@ -19,7 +19,7 @@ duplicated: it scrolls the transcript you already have.
 ## Install
 
 ```bash
-pi install npm:@mblarsen/pi-assistant-jump
+pi install npm:@mblarsen/pi-message-jump
 ```
 
 Restart Pi, or run `/reload`.
@@ -28,22 +28,22 @@ Restart Pi, or run `/reload`.
 
 | Key | Command | Effect |
 | --- | --- | --- |
-| `ctrl+shift+k` | `/reply prev` | Jump to the previous message |
-| `ctrl+shift+j` | `/reply next` | Jump to the next message |
+| `ctrl+shift+k` | `/jump prev` | Jump to the previous message |
+| `ctrl+shift+j` | `/jump next` | Jump to the next message |
 
-`/reply` also carries `context` and `debug`. Type a space to list the
+`/jump` also carries `context` and `debug`. Type a space to list the
 subcommands, and `context` followed by a space to list common settings. The
 letters `p`, `n`, `c` and `d` are accepted as shorthands:
 
 | Command | Effect |
 | --- | --- |
-| `/reply` | Show the usage line and the current context |
-| `/reply context` | Show the current setting |
-| `/reply context 2/3` | Two thirds of the viewport (default) |
-| `/reply context 1/2` | Half of the viewport |
-| `/reply context 5` | Five rows of context |
-| `/reply context 0` | Message at the very top |
-| `/reply debug` | Write the transcript state the jumps can see |
+| `/jump` | Show the usage line and the current context |
+| `/jump context` | Show the current setting |
+| `/jump context 2/3` | Two thirds of the viewport (default) |
+| `/jump context 1/2` | Half of the viewport |
+| `/jump context 5` | Five rows of context |
+| `/jump context 0` | Message at the very top |
+| `/jump debug` | Write the transcript state the jumps can see |
 
 An unknown subcommand, or an argument a subcommand does not take, prints the
 usage line instead.
@@ -57,7 +57,7 @@ bottom while you read. `ctrl+end` returns to the bottom and resumes following.
 
 A jump puts the message's first line two thirds of the way down the screen, so
 the tail of what came before it stays visible as context. Change that with
-`/reply context`.
+`/jump context`.
 
 Navigation is measured from the message you are on, not from the viewport top.
 That keeps the message you just read from being picked again, and it reaches a
@@ -77,10 +77,10 @@ you can count on are the prompts and the turns that ended in text.
 
 ## Limits
 
-Run `/reply debug` to see what the extension can see: how many stops it found,
+Run `/jump debug` to see what the extension can see: how many stops it found,
 where the viewport sits, and every row it would stop at. Pi hides footer
 notifications while the transcript is scrolled up, so the same report is
-written to `/tmp/pi-assistant-jump-debug.json` together with the last 20 jumps.
+written to `/tmp/pi-message-jump-debug.json` together with the last 20 jumps.
 That file is the thing to send with a bug report.
 
 The extension walks Pi's transcript components, which have no public scrolling

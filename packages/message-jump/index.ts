@@ -1,6 +1,6 @@
 /**
- * Assistant jump extension - move the fullscreen transcript to the previous or
- * next assistant reply.
+ * Message jump extension - move the fullscreen transcript to the previous or
+ * next message.
  *
  * Pi already has `tui.altScreen.previousPrompt` / `nextPrompt`, which jump
  * between OSC 133 zone starts. Assistant blocks only emit that zone when the
@@ -16,7 +16,7 @@
 
 import { writeFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { parseReplyArgs, replyArgumentCompletions, replyUsage } from "./command.ts";
+import { parseJumpArgs, jumpArgumentCompletions, jumpUsage } from "./command.ts";
 import { resolveAnchor, type AssistantComponent } from "./message-blocks.ts";
 import {
 	clampViewportTop,
@@ -30,7 +30,7 @@ import {
 	type TranscriptNode,
 } from "./transcript-jump.ts";
 
-const WIDGET_KEY = "assistant-jump:tui-probe";
+const WIDGET_KEY = "message-jump:tui-probe";
 const PREVIOUS_SHORTCUT = "ctrl+shift+k";
 const NEXT_SHORTCUT = "ctrl+shift+j";
 
@@ -59,7 +59,7 @@ interface WidgetTui extends TuiLike {}
 
 let tuiRef: WidgetTui | undefined;
 
-const DEBUG_PATH = "/tmp/pi-assistant-jump-debug.json";
+const DEBUG_PATH = "/tmp/pi-message-jump-debug.json";
 const JUMP_LOG_LIMIT = 20;
 
 interface TranscriptState {
@@ -293,7 +293,7 @@ function snapshotOf(state: TranscriptState): Record<string, unknown> {
 function jumpToAssistantReply(ctx: ExtensionContext, direction: JumpDirection): void {
 	const state = readTranscript(ctx);
 	if (!state.ok) {
-		ctx.ui.notify(`Assistant jump: ${state.reason}`, "warning");
+		ctx.ui.notify(`Message jump: ${state.reason}`, "warning");
 		return;
 	}
 
@@ -307,7 +307,7 @@ function jumpToAssistantReply(ctx: ExtensionContext, direction: JumpDirection): 
 		};
 		recordJump(record);
 		writeDebug(snapshotOf(data));
-		ctx.ui.notify("Assistant jump: no messages in this transcript", "info");
+		ctx.ui.notify("Message jump: no messages in this transcript", "info");
 		return;
 	}
 
@@ -372,7 +372,7 @@ function recordJump(record: JumpRecord): void {
 function reportState(ctx: ExtensionContext): void {
 	const state = readTranscript(ctx);
 	if (!state.ok) {
-		ctx.ui.notify(`Assistant jump: ${state.reason}`, "warning");
+		ctx.ui.notify(`Message jump: ${state.reason}`, "warning");
 		return;
 	}
 
@@ -384,7 +384,7 @@ function reportState(ctx: ExtensionContext): void {
 	const prompts = inventory.filter((entry) => entry.kind === "prompt").length;
 
 	ctx.ui.notify(
-		`Assistant jump: ${data.anchors.length} stops (${replies} replies, ${prompts} prompts) · viewport top ${data.viewportTop}${
+		`Message jump: ${data.anchors.length} stops (${replies} replies, ${prompts} prompts) · viewport top ${data.viewportTop}${
 			pickAnchor(data.anchors, data.viewportTop, -1)?.start === undefined
 				? " · no reply above"
 				: ` · previous ${pickAnchor(data.anchors, data.viewportTop, -1)?.start}`
@@ -427,11 +427,11 @@ export default function assistantJump(pi: ExtensionAPI): void {
 		handler: (ctx) => jumpToAssistantReply(ctx, 1),
 	});
 
-	pi.registerCommand("reply", {
+	pi.registerCommand("jump", {
 		description: "Jump between messages, or set the context a jump keeps above its message",
-		getArgumentCompletions: replyArgumentCompletions,
+		getArgumentCompletions: jumpArgumentCompletions,
 		handler: async (args, ctx) => {
-			const invocation = parseReplyArgs(args ?? "");
+			const invocation = parseJumpArgs(args ?? "");
 			switch (invocation.command) {
 				case "prev":
 					await jumpToAssistantReply(ctx, -1);
@@ -444,7 +444,7 @@ export default function assistantJump(pi: ExtensionAPI): void {
 					return;
 				case "context": {
 					if (invocation.value === "") {
-						ctx.ui.notify(`Assistant jump: context ${String(contextSpec)}`, "info");
+						ctx.ui.notify(`Message jump: context ${String(contextSpec)}`, "info");
 						return;
 					}
 					contextSpec = invocation.value;
@@ -454,14 +454,14 @@ export default function assistantJump(pi: ExtensionAPI): void {
 						locateScrollView(tuiRef ?? {})?.viewportHeight ?? 0,
 					);
 					ctx.ui.notify(
-						`Assistant jump: context ${String(contextSpec)}${rows === 0 ? "" : ` (${rows} rows)`}`,
+						`Message jump: context ${String(contextSpec)}${rows === 0 ? "" : ` (${rows} rows)`}`,
 						"info",
 					);
 					return;
 				}
 				default: {
 					const unknown = invocation.unknown === undefined ? "" : `: ${invocation.unknown}`;
-					ctx.ui.notify(`Assistant jump${unknown} · ${replyUsage(contextSpec)}`, "warning");
+					ctx.ui.notify(`Message jump${unknown} · ${jumpUsage(contextSpec)}`, "warning");
 				}
 			}
 		},
