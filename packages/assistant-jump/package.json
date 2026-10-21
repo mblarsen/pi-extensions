@@ -1,0 +1,36 @@
+{
+	"name": "@mblarsen/pi-assistant-jump",
+	"version": "0.1.0",
+	"description": "Jump the Pi fullscreen transcript to the previous or next assistant reply.",
+	"license": "MIT",
+	"type": "module",
+	"keywords": [
+		"pi-package",
+		"pi-extension"
+	],
+	"files": [
+		"index.ts",
+		"transcript-jump.ts",
+		"message-blocks.ts",
+		"README.md",
+		"command.ts"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/mblarsen/pi-extensions.git",
+		"directory": "packages/assistant-jump"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"author": "Michael B\u00f8cker-Larsen"
+}
