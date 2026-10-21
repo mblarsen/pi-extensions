@@ -19,8 +19,7 @@
     "pack:check": "npm pack --workspaces --dry-run",
     "check": "npm run typecheck && npm test && npm run pack:check",
     "changeset": "changeset",
-    "changeset:version": "changeset version",
-    "version": "changeset version && npm install --package-lock-only --ignore-scripts",
+    "changeset:version": "changeset version && npm install --package-lock-only --ignore-scripts",
     "release": "changeset publish"
   },
   "devDependencies": {
