@@ -1,5 +1,5 @@
 /**
- * Transcript offset maths for the assistant-jump extension.
+ * Transcript offset maths for the message-jump extension.
  *
  * Pi renders the fullscreen transcript as one component tree inside a
  * ScrollView. The ScrollView scrolls by terminal row, so jumping to "the

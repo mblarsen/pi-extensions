@@ -1,7 +1,7 @@
 {
-	"name": "@mblarsen/pi-assistant-jump",
+	"name": "@mblarsen/pi-message-jump",
 	"version": "0.1.0",
-	"description": "Jump the Pi fullscreen transcript to the previous or next assistant reply.",
+	"description": "Jump the Pi fullscreen transcript to the previous or next message.",
 	"license": "MIT",
 	"type": "module",
 	"keywords": [

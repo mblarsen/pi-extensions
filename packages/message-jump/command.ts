@@ -1,5 +1,5 @@
 /**
- * Argument handling for the single `/reply` command.
+ * Argument handling for the single `/jump` command.
  *
  * The command carries four subcommands, so the parsing and the completion
  * suggestions live here as pure functions and stay testable without a live TUI.
@@ -33,7 +33,7 @@ const ALIASES: Record<string, Subcommand> = {
 	debug: "debug",
 };
 
-export interface ReplyInvocation {
+export interface JumpInvocation {
 	/** `help` means the arguments named no known subcommand. */
 	command: Subcommand | "help";
 	/** Subcommand argument, for `context` the rows or fraction. */
@@ -42,7 +42,7 @@ export interface ReplyInvocation {
 	unknown?: string;
 }
 
-export function parseReplyArgs(args: string): ReplyInvocation {
+export function parseJumpArgs(args: string): JumpInvocation {
 	const tokens = args.trim().split(/\s+/).filter(Boolean);
 	if (tokens.length === 0) return { command: "help", value: "" };
 
@@ -62,7 +62,7 @@ export function parseReplyArgs(args: string): ReplyInvocation {
  * The value replaces the whole argument string, the way the built-in commands
  * do, so `<command> <value>` is returned rather than the bare value.
  */
-export function replyArgumentCompletions(prefix: string): AutocompleteItem[] | null {
+export function jumpArgumentCompletions(prefix: string): AutocompleteItem[] | null {
 	const text = prefix.trimStart();
 	const tokens = text.split(/\s+/);
 	const head = tokens[0] ?? "";
@@ -80,12 +80,12 @@ export function replyArgumentCompletions(prefix: string): AutocompleteItem[] | n
 
 	const partial = tokens.slice(1).join(" ");
 	const presetItems = CONTEXT_PRESETS.filter((preset) => preset.startsWith(partial)).map((preset) => ({
-		value: `context ${preset}`,
+		value: `jump ${preset}`,
 		label: preset,
 	}));
 	return presetItems.length > 0 ? presetItems : null;
 }
 
-export function replyUsage(contextSpec: string | number): string {
-	return `Assistant jump: /reply ${SUBCOMMANDS.join(" | ")} · context ${String(contextSpec)}`;
+export function jumpUsage(contextSpec: string | number): string {
+	return `Message jump: /jump ${SUBCOMMANDS.join(" | ")} · context ${String(contextSpec)}`;
 }
