@@ -1,5 +1,11 @@
 # @mblarsen/pi-idle-learn
 
+## 0.2.1
+
+### Patch Changes
+
+- 9edf065: Declare host-provided packages as wildcard peer dependencies to avoid duplicate runtime modules and Pi extension warnings.
+
 ## 0.2.0
 
 ### Minor Changes
