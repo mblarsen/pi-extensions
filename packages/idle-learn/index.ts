@@ -9,13 +9,14 @@ import { IdleReviewer } from "./lifecycle.ts";
 import { ReviewPanel, safeText, type ReviewAction } from "./panel.ts";
 import { analyze, effectivePrompt } from "./reviewer.ts";
 import { decideSuggestion, listSuggestions } from "./store.ts";
+import { calibrate, calibrationDue } from "./calibration.ts";
 
-export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analyze = analyze): void {
+export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analyze = analyze, calibrateEvidence: typeof calibrate = calibrate): void {
 	let context: ExtensionContext | undefined;
 	let root: string | undefined;
 	let watcher: FSWatcher | undefined;
 	let configSnapshot = "";
-	const reviewer = new IdleReviewer(refresh, reviewEvidence);
+	const reviewer = new IdleReviewer(refresh, (input) => input.purpose === "calibration" ? calibrateEvidence(input) : reviewEvidence(input));
 	function refresh() {
 		if (!context || !root || !context.hasUI) return;
 		const config = loadConfig(root);
@@ -33,17 +34,20 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 			watcher = watch(projectPath(root, ".pi/idle-learn"), (_event, filename) => {
 				if (filename?.toString() !== "config.toml" || !root) return;
 				const next = JSON.stringify(loadConfig(root));
-				if (next !== configSnapshot) { configSnapshot = next; void reviewer.cancel().then(refresh); }
+				if (next !== configSnapshot) {
+					configSnapshot = next;
+					void reviewer.cancel().then(() => { refresh(); if (context) scheduleCalibration(context); });
+				}
 			});
 			watcher.unref();
 			watcher.on("error", () => { watcher?.close(); watcher = undefined; });
 		} catch {}
 	}
-	function snapshot(ctx: ExtensionContext) {
+	function snapshot(ctx: ExtensionContext, purpose?: "calibration") {
 		if (!root || !ctx.model) throw new Error("Select a model before analyzing.");
 		requireOptIn(root);
 		if (!ctx.isIdle()) throw new Error("Wait for Pi to finish before analyzing.");
-		return { root, session: ctx.sessionManager.getSessionId(), entries: transcriptEntries(ctx.sessionManager.getBranch()),
+		return { root, session: ctx.sessionManager.getSessionId(), entries: purpose === "calibration" ? [] : transcriptEntries(ctx.sessionManager.getBranch()), ...(purpose ? { purpose } : {}),
 			provider: ctx.model.provider, model: ctx.model.id, thinking: pi.getThinkingLevel() };
 	}
 	function schedule(ctx: ExtensionContext) {
@@ -51,10 +55,16 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 		const config = loadConfig(root);
 		if (!config.enabled || config.status !== "ready") return;
 		reviewer.schedule(config.config.idle_minutes * 60_000, () => {
-			try { return snapshot(ctx); } catch { return undefined; }
-		});
+			try { return snapshot(ctx, root && calibrationDue(root) ? "calibration" : undefined); } catch { return undefined; }
+		}, () => Boolean(root && calibrationDue(root)));
 	}
-	pi.on("session_start", (_event, ctx) => { context = ctx; root = projectRoot(ctx.cwd); refresh(); observeConfig(); });
+	function scheduleCalibration(ctx: ExtensionContext) {
+		try { if (root && ctx.isIdle() && calibrationDue(root)) schedule(ctx); }
+		catch (error) { ctx.ui.notify(`Idle Learn: ${error instanceof Error ? error.message : String(error)}`, "error"); }
+	}
+	pi.on("session_start", (_event, ctx) => {
+		context = ctx; root = projectRoot(ctx.cwd); refresh(); observeConfig(); scheduleCalibration(ctx);
+	});
 	pi.on("input", () => { void reviewer.resumeWork(); });
 	pi.on("user_bash", () => { void reviewer.resumeWork(); });
 	pi.on("agent_start", () => { void reviewer.resumeWork(); });
@@ -110,7 +120,7 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 			const config = loaded.config;
 			const label = config.model ? `${config.provider}/${config.model} (explicit)` : `${ctx.model?.provider}/${ctx.model?.id} (follow session)`;
 			const choice = await ctx.ui.select(`Idle Learn / Configuration\n${label}\nThinking: ${config.thinking ?? `${pi.getThinkingLevel()} (follow session)`}`, [
-				`${config.enabled ? "Pause" : "Enable"} analysis`, `Idle delay: ${config.idle_minutes} minutes`, "Reviewer model", "Thinking level", "Reviewer prompt", "Edit TOML", "Back",
+				`${config.enabled ? "Pause" : "Enable"} analysis`, `Idle delay: ${config.idle_minutes} minutes`, `Calibration: ${config.calibration?.after_rejections === 0 ? "manual only" : `after ${config.calibration?.after_rejections ?? 3} rejections`}`, "Reviewer model", "Thinking level", "Reviewer prompt", "Edit TOML", "Back",
 			]);
 			if (!choice || choice === "Back") return;
 			const next: Config = { ...config };
@@ -119,6 +129,10 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 				const value = await ctx.ui.input("Idle delay in minutes (1-1440)", String(config.idle_minutes));
 				if (value === undefined) continue;
 				next.idle_minutes = Number(value);
+			} else if (choice.startsWith("Calibration:")) {
+				const value = await ctx.ui.input("Calibrate after new rejections (0 = manual only, 1-1000 = threshold)", String(config.calibration?.after_rejections ?? 3));
+				if (value === undefined) continue;
+				next.calibration = { after_rejections: Number(value) };
 			} else if (choice === "Reviewer model") {
 				const models = ctx.modelRegistry.getAvailable();
 				const options = ["Follow current session", ...models.map((model) => `${model.provider}/${model.id}`)];
@@ -156,15 +170,15 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 				const edited = await ctx.ui.editor("Idle Learn configuration (Escape cancels)", previous);
 				if (edited === undefined) continue;
 				Object.assign(next, parseConfig(edited));
-				for (const key of ["provider", "model", "thinking", "prompt_file", "append_file"] as const) if (!(key in parseConfig(edited))) delete next[key];
+				for (const key of ["provider", "model", "thinking", "prompt_file", "append_file", "calibration"] as const) if (!(key in parseConfig(edited))) delete next[key];
 			}
 			effectivePrompt(root, next);
 			saveConfig(root, next, previous); refresh();
 		}
 	}
-	function analyzeNow(ctx: ExtensionCommandContext): void {
+	function analyzeNow(ctx: ExtensionCommandContext, purpose?: "calibration"): void {
 		if (reviewer.running) { ctx.ui.notify("Idle Learn: a review is already running. Use /idle-learn cancel to stop it.", "info"); return; }
-		const input = snapshot(ctx);
+		const input = snapshot(ctx, purpose);
 		const current = () => root === input.root && context?.sessionManager.getSessionId() === input.session;
 		void reviewer.start(input, "manual").then((result) => {
 			if (!current()) return;
@@ -174,7 +188,7 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 		}).catch((error) => {
 			if (current() && !reviewer.status.startsWith("Cancelled")) ctx.ui.notify(`Idle Learn: ${error instanceof Error ? error.message : String(error)}`, "error");
 		});
-		ctx.ui.notify("Idle Learn: review started in the background. You can continue chatting. Use /idle-learn cancel to stop it.", "info");
+		ctx.ui.notify(`Idle Learn: ${purpose === "calibration" ? "calibration" : "review"} started in the background. You can continue chatting. Use /idle-learn cancel to stop it.`, "info");
 	}
 	async function review(ctx: ExtensionCommandContext) {
 		if (!root) return;
@@ -191,19 +205,22 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 			try {
 				if (action.kind === "analyze") { analyzeNow(ctx); return; }
 				else if ("suggestion" in action) {
-					if (action.kind === "apply" && !await ctx.ui.confirm("Apply this displayed suggestion?", `${safeText(action.suggestion.title)}\nTarget: ${safeText(action.suggestion.target)}\nThe target will be checked for changes before applying.`)) continue;
+					if (action.kind === "apply" && !await ctx.ui.confirm(action.suggestion.kind === "calibration" ? "Apply this calibration?" : "Apply this displayed suggestion?", `${safeText(action.suggestion.title)}\nTarget: ${safeText(action.suggestion.target)}\n${action.suggestion.kind === "calibration" ? "Changes future Idle Learn reviews for this project, not AGENTS.md.\n" : ""}The target will be checked for changes before applying.`)) continue;
 					const reason = action.kind === "reject" ? await ctx.ui.input("Rejection reason (optional; Escape cancels rejection)") : undefined;
 					if (action.kind === "reject" && reason === undefined) continue;
 					await decideSuggestion(root, action.suggestion, action.kind, reason);
-					status = action.kind === "apply" ? "Applied. Other suggestions are rechecked against the new target." : "Rejected. The next reviewer will see this decision.";
+					status = action.suggestion.kind === "calibration"
+						? action.kind === "apply" ? "Calibration applied. Future project reviews use the approved preferences." : "Calibration rejected. Reviewer preferences are unchanged."
+						: action.kind === "apply" ? "Applied. Other suggestions are rechecked against the new target." : "Rejected. The next reviewer will see this decision.";
 					refresh();
+					scheduleCalibration(ctx);
 				}
 			} catch (error) { status = `Error: ${error instanceof Error ? error.message : String(error)}`; ctx.ui.notify(status, "error"); }
 		}
 	}
 	pi.registerCommand("idle-learn", {
 		description: "Opt in, review project instruction suggestions, or configure idle learning",
-		getArgumentCompletions: (prefix) => ["init", "analyze", "review", "config", "cancel"].filter((value) => value.startsWith(prefix)).map((value) => ({ value, label: value })),
+		getArgumentCompletions: (prefix) => ["init", "analyze", "calibrate", "review", "config", "cancel"].filter((value) => value.startsWith(prefix)).map((value) => ({ value, label: value })),
 		handler: async (args, ctx) => {
 			if (ctx.mode !== "tui") { ctx.ui.notify("Idle Learn commands require interactive terminal mode.", "error"); return; }
 			context = ctx; root ??= projectRoot(ctx.cwd);
@@ -211,15 +228,16 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 				let choice = args.trim();
 				if (!choice) {
 					const config = loadConfig(root);
-					const selected = await ctx.ui.select(`Idle Learn\nProject: ${root}\n${reviewer.status}\n${config.status === "missing" ? "Not enabled" : config.enabled ? "Enabled" : "Paused or invalid configuration"}\n${config.status === "ready" ? listSuggestions(root).length : 0} pending suggestions`, ["Analyze now", "Review suggestions", ...(reviewer.running ? ["Cancel review"] : []), "Configuration", "Initialize project", "Close"]);
-					choice = selected === "Analyze now" ? "analyze" : selected === "Review suggestions" ? "review" : selected === "Cancel review" ? "cancel" : selected === "Configuration" ? "config" : selected === "Initialize project" ? "init" : "";
+					const selected = await ctx.ui.select(`Idle Learn\nProject: ${root}\n${reviewer.status}\n${config.status === "missing" ? "Not enabled" : config.enabled ? "Enabled" : "Paused or invalid configuration"}\n${config.status === "ready" ? listSuggestions(root).length : 0} pending suggestions`, ["Analyze now", "Calibrate reviewer", "Review suggestions", ...(reviewer.running ? ["Cancel review"] : []), "Configuration", "Initialize project", "Close"]);
+					choice = selected === "Analyze now" ? "analyze" : selected === "Calibrate reviewer" ? "calibrate" : selected === "Review suggestions" ? "review" : selected === "Cancel review" ? "cancel" : selected === "Configuration" ? "config" : selected === "Initialize project" ? "init" : "";
 				}
 				if (choice === "init") await init(ctx);
 				else if (choice === "config") { await reviewer.cancel(); await configure(ctx); }
 				else if (choice === "analyze") analyzeNow(ctx);
+				else if (choice === "calibrate") analyzeNow(ctx, "calibration");
 				else if (choice === "cancel") { await reviewer.cancel(); ctx.ui.notify("Idle Learn: review stopped. Completed chunks are saved.", "info"); }
 				else if (choice === "review") await review(ctx);
-				else if (choice) throw new Error("Use /idle-learn [init|analyze|review|config|cancel].");
+				else if (choice) throw new Error("Use /idle-learn [init|analyze|calibrate|review|config|cancel].");
 			} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : String(error), "error"); }
 			finally { refresh(); }
 		},

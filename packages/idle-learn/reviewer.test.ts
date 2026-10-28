@@ -10,7 +10,8 @@ import { readProjectFile } from "./files.ts";
 import { IdleReviewer } from "./lifecycle.ts";
 import { analyze, effectivePrompt, type ReviewInput } from "./reviewer.ts";
 import { readObservations, readProgress, STATE_PATH } from "./state.ts";
-import { listSuggestions } from "./store.ts";
+import { decideSuggestion, listSuggestions } from "./store.ts";
+import { calibrate } from "./calibration.ts";
 
 const directories: string[] = [];
 function fixture(enabled = true) {
@@ -161,7 +162,7 @@ test("lifecycle cancels work and clears idle scheduling without retry loops", as
 	assert.equal(calls, 1);
 });
 
-test("packaged child worker completes against a local provider without ambient resources", { timeout: 30_000 }, async () => {
+test("packaged review and calibration workers complete without ambient resources", { timeout: 30_000 }, async () => {
 	const root = fixture();
 	const agent = fixture(false);
 	mkdirSync(join(root, ".pi/extensions"));
@@ -169,13 +170,14 @@ test("packaged child worker completes against a local provider without ambient r
 	writeFileSync(join(agent, "AGENTS.md"), "AMBIENT_GLOBAL_INSTRUCTIONS");
 	writeFileSync(join(agent, "SYSTEM.md"), "AMBIENT_SYSTEM_PROMPT");
 	const requests: any[] = [];
+	let nextOutput: unknown = output();
 	const server = createServer((request, response) => {
 		let body = "";
 		request.setEncoding("utf8"); request.on("data", (part) => { body += part; });
 		request.on("end", () => {
 			requests.push(JSON.parse(body));
 			response.writeHead(200, { "content-type": "text/event-stream" });
-			response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", created: 1, model: "test-model", choices: [{ index: 0, delta: { role: "assistant", content: JSON.stringify(output()) }, finish_reason: null }] })}\n\n`);
+			response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", created: 1, model: "test-model", choices: [{ index: 0, delta: { role: "assistant", content: JSON.stringify(nextOutput) }, finish_reason: null }] })}\n\n`);
 			response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", created: 1, model: "test-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
 			response.end("data: [DONE]\n\n");
 		});
@@ -191,6 +193,13 @@ test("packaged child worker completes against a local provider without ambient r
 		assert.equal(requests.length, 1);
 		assert.doesNotMatch(JSON.stringify(requests), /AMBIENT_GLOBAL|AMBIENT_SYSTEM|expert coding assistant/);
 		assert.deepEqual(requests[0].tools.map((tool: any) => tool.function.name).sort(), ["evidence_list", "evidence_read"]);
+		await decideSuggestion(root, result.suggestions[0], "reject", "Too specific.");
+		nextOutput = { suggestions: [] };
+		await calibrate(input(root, { provider: "idle-test", purpose: "calibration" }));
+		assert.equal(requests.length, 2);
+		assert.deepEqual(requests[1].tools ?? [], []);
+		assert.match(JSON.stringify(requests[1].messages[0]), /You calibrate Idle Learn/);
+		assert.doesNotMatch(JSON.stringify(requests[1]), /AMBIENT_GLOBAL|AMBIENT_SYSTEM|expert coding assistant|You review project session evidence/);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		await new Promise<void>((resolve) => server.close(() => resolve()));

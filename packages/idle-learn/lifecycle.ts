@@ -21,14 +21,14 @@ export class IdleReviewer {
 		this.controller?.abort();
 		if (this.active) await this.active.catch(() => {});
 	}
-	schedule(milliseconds: number, snapshot: () => Omit<ReviewInput, "signal"> | undefined): void {
+	schedule(milliseconds: number, snapshot: () => Omit<ReviewInput, "signal"> | undefined, shouldContinue: () => boolean = () => false): void {
 		this.clearTimer();
 		if (this.running) return;
 		this.timer = setTimeout(() => {
 			this.timer = undefined;
 			const input = snapshot();
 			if (input) void this.start(input).then((result) => {
-				if (result.remaining) this.schedule(milliseconds, snapshot);
+				if (result.remaining || input.purpose === "calibration" || shouldContinue()) this.schedule(milliseconds, snapshot, shouldContinue);
 			}).catch(() => {});
 		}, milliseconds);
 		this.timer.unref();
@@ -39,16 +39,17 @@ export class IdleReviewer {
 		const controller = new AbortController();
 		this.controller = controller;
 		this.mode = mode;
-		this.status = mode === "manual" ? "Analyzing snapshot in background" : "Analyzing (resume work to cancel)";
+		this.status = input.purpose === "calibration" ? "Calibrating project reviewer" : mode === "manual" ? "Analyzing snapshot in background" : "Analyzing (resume work to cancel)";
 		const promise = Promise.resolve().then(async () => {
 			const suggestions: ReviewResult["suggestions"] = [];
 			let reviewed = 0;
 			let remaining = 0;
 			for (let chunk = 1; chunk <= 3; chunk++) {
 				controller.signal.throwIfAborted();
-				this.status = `Analyzing chunk ${chunk}/3${chunk > 1 ? `; ${remaining} entries remain` : ""}`;
+				this.status = input.purpose === "calibration" ? "Calibrating project reviewer" : `Analyzing chunk ${chunk}/3${chunk > 1 ? `; ${remaining} entries remain` : ""}`;
 				this.changed();
 				const result = await this.review({ ...input, signal: controller.signal, suggestionLimit: 3 - suggestions.length });
+				if (input.purpose === "calibration") return result;
 				suggestions.push(...result.suggestions);
 				reviewed += result.reviewed;
 				remaining = result.remaining ?? 0;

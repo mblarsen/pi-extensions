@@ -26,7 +26,7 @@ test("missing opt-in reads and failed operations create no files", () => {
 
 test("init creates defaults and never overwrites an existing configuration", () => {
 	const root = fixture();
-	assert.deepEqual(initializeConfig(root), { enabled: true, idle_minutes: 10 });
+	assert.deepEqual(initializeConfig(root), { enabled: true, idle_minutes: 10, calibration: { after_rejections: 3 } });
 	const before = readFileSync(join(root, CONFIG_PATH), "utf8");
 	assert.throws(() => initializeConfig(root), /changed|EEXIST/);
 	assert.equal(readFileSync(join(root, CONFIG_PATH), "utf8"), before);

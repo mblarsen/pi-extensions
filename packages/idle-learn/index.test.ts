@@ -6,7 +6,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { discoverAndLoadExtensions, type ExtensionAPI, type ExtensionCommandContext, type RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import idleLearn from "./index.ts";
-import { initializeConfig, loadConfig } from "./config.ts";
+import { CONFIG_PATH, initializeConfig, loadConfig, requireOptIn, saveConfig } from "./config.ts";
+import { readProjectFile } from "./files.ts";
+import { PREFERENCES_PATH, readPreferences } from "./preferences.ts";
+import { decideSuggestion, saveProposals } from "./store.ts";
 import type { ReviewInput, ReviewResult } from "./reviewer.ts";
 
 function directory() { return realpathSync(mkdtempSync(join(tmpdir(), "idle-learn-extension-"))); }
@@ -72,32 +75,36 @@ test("interactive init requires confirmation, review renders, and config can pau
 	}
 });
 
-async function backgroundFixture() {
+async function backgroundFixture(setup?: (root: string) => Promise<void>) {
 	const root = directory();
 	initializeConfig(root);
+	if (setup) await setup(root);
 	const handlers = new Map<string, Array<(...args: any[]) => any>>();
 	let command!: RegisteredCommand;
 	const notifications: Array<{ message: string; type: string }> = [];
 	const statuses: string[] = [];
 	const reviews: ReviewInput[] = [];
 	const selections: string[] = [];
+	const rendered: string[] = [];
+	const confirmations: string[] = [];
 	let finish!: (value: ReviewResult) => void;
 	let fail!: (error: Error) => void;
 	let customCalls = 0;
 	let branch = [{ id: "captured", type: "message", message: { role: "user", content: "Use docs/." } }];
 	let idle = true;
-	idleLearn({
-		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
-		registerCommand(_name: string, value: RegisteredCommand) { command = value; },
-		getThinkingLevel: () => "off",
-	} as unknown as ExtensionAPI, (input) => {
+	const review = (input: ReviewInput) => {
 		reviews.push(input);
-		return new Promise((resolve, reject) => {
+		return new Promise<ReviewResult>((resolve, reject) => {
 			finish = resolve; fail = reject;
 			input.signal.throwIfAborted();
 			input.signal.addEventListener("abort", () => reject(input.signal.reason), { once: true });
 		});
-	});
+	};
+	idleLearn({
+		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+		registerCommand(_name: string, value: RegisteredCommand) { command = value; },
+		getThinkingLevel: () => "off",
+	} as unknown as ExtensionAPI, review, review);
 	const ctx = {
 		cwd: root, mode: "tui", hasUI: true, model: { provider: "test", id: "snapshot-model" }, isIdle: () => idle,
 		sessionManager: { getSessionId: () => "background-session", getBranch: () => branch },
@@ -105,18 +112,22 @@ async function backgroundFixture() {
 			setStatus(_key: string, value?: string) { statuses.push(value ?? ""); },
 			notify(message: string, type: string) { notifications.push({ message, type }); },
 			select: async () => selections.shift(),
+			input: async () => "Too feature-specific.",
+			confirm: async (title: string, body: string) => { confirmations.push(`${title}\n${body}`); return true; },
 			custom: async (factory: any) => new Promise((resolve) => {
 				customCalls++;
 				const component = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_color: string, text: string) => text }, { matches: () => false }, resolve);
-				component.render(80);
-				component.handleInput(selections.shift() === "analyze" ? "a" : "\x1b");
+				rendered.push(component.render(80).join("\n"));
+				const action = selections.shift();
+				if (action === "apply" || action === "reject") { component.handleInput("\r"); component.handleInput(action === "apply" ? "p" : "r"); }
+				else component.handleInput(action === "analyze" ? "a" : "\x1b");
 			}),
 		},
 	} as unknown as ExtensionCommandContext;
 	const emit = async (event: string) => { for (const handler of handlers.get(event) ?? []) await handler({}, ctx); };
 	await emit("session_start");
 	return {
-		ctx, reviews, notifications, statuses, selections, emit,
+		ctx, reviews, notifications, statuses, selections, rendered, confirmations, emit,
 		command: (args: string) => command.handler(args, ctx),
 		get customCalls() { return customCalls; },
 		setIdle: (value: boolean) => { idle = value; },
@@ -191,6 +202,106 @@ test("background provider failures are reported without opening a modal or escap
 		assert.equal(run.customCalls, 0);
 		assert.match(run.notifications.at(-1)!.message, /Provider unavailable/);
 		assert.equal(run.notifications.at(-1)!.type, "error");
+	} finally { await run.close(); }
+});
+
+async function ordinaryItem(root: string, index: number, reject = true) {
+	const [item] = await saveProposals(root, [{ title: `Feature rule ${index}`, target: `feature-${index}/AGENTS.md`, rationale: "A feature correction.",
+		evidence: [{ session: "test", entry: String(index), quote: "Check the feature." }], baseHash: null, before: "", after: `Check feature ${index}.\n` }]);
+	return reject ? decideSuggestion(root, item, "reject", "Too feature-specific.") : item;
+}
+
+test("manual calibration uses the same background status and cancellation flow", async () => {
+	const run = await backgroundFixture();
+	try {
+		run.selections.push("Calibrate reviewer");
+		await run.command("");
+		assert.equal(run.customCalls, 0);
+		assert.equal(run.reviews[0].purpose, "calibration");
+		assert.deepEqual(run.reviews[0].entries, []);
+		assert.match(run.statuses.join("\n"), /Calibrating/);
+		await run.emit("input"); await run.emit("agent_start");
+		assert.equal(run.reviews[0].signal.aborted, false);
+		await run.command("analyze");
+		assert.equal(run.reviews.length, 1);
+		await run.command("cancel"); await settleBackground();
+		assert.equal(run.reviews[0].signal.aborted, true);
+	} finally { await run.close(); }
+});
+
+test("persisted rejection threshold queues automatic calibration only after the idle delay", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const run = await backgroundFixture(async (root) => { for (let index = 1; index <= 3; index++) await ordinaryItem(root, index); });
+	try {
+		assert.equal(run.reviews.length, 0);
+		t.mock.timers.tick(599_999); await settleBackground();
+		assert.equal(run.reviews.length, 0);
+		t.mock.timers.tick(1); await settleBackground();
+		assert.equal(run.reviews.length, 1);
+		assert.equal(run.reviews[0].purpose, "calibration");
+		assert.equal(run.customCalls, 0);
+		await run.emit("input"); await settleBackground();
+		assert.equal(run.reviews[0].signal.aborted, true);
+	} finally { await run.close(); }
+});
+
+test("third rejection in the existing review UI queues calibration without a new screen", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const run = await backgroundFixture(async (root) => {
+		await ordinaryItem(root, 1); await ordinaryItem(root, 2); await ordinaryItem(root, 3, false);
+	});
+	try {
+		run.selections.push("reject");
+		await run.command("review");
+		assert.equal(run.reviews.length, 0);
+		t.mock.timers.tick(600_000); await settleBackground();
+		assert.equal(run.reviews[0].purpose, "calibration");
+		assert.equal(run.customCalls, 2);
+	} finally { await run.close(); }
+});
+
+test("ordinary idle reviews switch to calibration after feedback arrives during the run", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const run = await backgroundFixture(async (root) => { await ordinaryItem(root, 1); await ordinaryItem(root, 2); });
+	try {
+		await run.emit("agent_settled");
+		t.mock.timers.tick(600_000); await settleBackground();
+		assert.equal(run.reviews[0].purpose, undefined);
+		await ordinaryItem(run.ctx.cwd, 3);
+		run.finish(); await settleBackground();
+		t.mock.timers.tick(600_000); await settleBackground();
+		assert.equal(run.reviews.length, 2);
+		assert.equal(run.reviews[1].purpose, "calibration");
+	} finally { await run.close(); }
+});
+
+test("manual-only configuration suppresses automatic calibration but not the command", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const run = await backgroundFixture(async (root) => {
+		for (let index = 1; index <= 3; index++) await ordinaryItem(root, index);
+		saveConfig(root, { ...requireOptIn(root), calibration: { after_rejections: 0 } }, readProjectFile(root, CONFIG_PATH)!);
+	});
+	try {
+		t.mock.timers.tick(600_000); await settleBackground();
+		assert.equal(run.reviews.length, 0);
+		await run.command("calibrate");
+		assert.equal(run.reviews[0].purpose, "calibration");
+	} finally { await run.close(); }
+});
+
+test("calibration uses the existing approval surface with its label and exact target", async () => {
+	const run = await backgroundFixture(async (root) => {
+		await saveProposals(root, [{ kind: "calibration", title: "Prefer lasting conventions", target: PREFERENCES_PATH, rationale: "Repeated feedback.",
+			evidence: [{ session: "decision", entry: "example", quote: "Too feature-specific." }], baseHash: null, before: "", after: "Prefer lasting project conventions.\n" }], undefined, undefined, "calibration");
+	});
+	try {
+		run.selections.push("apply");
+		await run.command("review");
+		assert.match(run.rendered.join("\n"), /Calibration/);
+		assert.match(run.confirmations[0], /Apply this calibration\?/);
+		assert.match(run.confirmations[0], /reviewer-preferences\.md/);
+		assert.match(readPreferences(run.ctx.cwd)!, /lasting project conventions/);
+		assert.equal(readProjectFile(run.ctx.cwd, "AGENTS.md"), null);
 	} finally { await run.close(); }
 });
 

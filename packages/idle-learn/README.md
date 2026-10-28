@@ -1,6 +1,6 @@
 # Idle Learn
 
-Review idle Pi sessions for useful project instructions. Approve each proposed change before Idle Learn updates an `AGENTS.md` file.
+Review idle Pi sessions for useful project instructions. Approve each proposed change before Idle Learn updates an `AGENTS.md` file. Calibrate project reviewer preferences from accepted and rejected suggestions, with the same approval flow.
 
 ## Inspiration
 
@@ -47,9 +47,10 @@ A committed enabled configuration also enables sessions in that checkout. Keep i
 | `/idle-learn` | Show project status, pending count, and menu |
 | `/idle-learn init` | Confirm opt-in and create configuration |
 | `/idle-learn analyze` | Start a manual review in the background |
+| `/idle-learn calibrate` | Propose project reviewer preferences from accepted/rejected suggestions |
 | `/idle-learn review` | Inspect, apply, reject, or analyze now |
 | `/idle-learn cancel` | Stop the active review and pending idle timer |
-| `/idle-learn config` | Change enable/pause, delay, model, thinking, and prompt files |
+| `/idle-learn config` | Change enable/pause, delay, calibration threshold, model, thinking, and prompt files |
 
 In review, use Up/Down or `j`/`k` to select. At narrow widths, press Enter to open details.
 At wide widths, press Tab or Shift+Tab to switch between list and details.
@@ -71,6 +72,9 @@ idle_minutes = 10
 # Optional UTF-8 prompt files. Relative paths start at the project root.
 # prompt_file = "reviewer.md"
 # append_file = "reviewer-extra.md"
+
+[calibration]
+after_rejections = 3 # 0 = manual only; 1 = after each rejection
 ```
 
 Provider and model must appear together. Thinking must be supported by the selected model. Idle delay accepts 1-1440 minutes.
@@ -85,6 +89,32 @@ The configuration screen can show the bundled and effective prompts.
 A replacement file replaces the reviewer prompt. An append file extends that selected prompt, not Pi's coding prompt.
 Prompt files must contain nonempty UTF-8 text and cannot exceed 32 KiB each.
 
+## Calibration
+
+Run `/idle-learn calibrate` or choose Calibrate reviewer from the menu. It returns immediately to chat, like Analyze now.
+Calibration uses accepted/rejected ordinary suggestions, rejection reasons, and the current project reviewer preferences. It does not review session transcripts.
+
+Automatic calibration waits for three new ordinary rejections, then starts at the next configured idle window. Missing threshold configuration also uses three.
+Set `calibration.after_rejections` to `0` for manual-only use, `1` after every rejection, or another whole number up to `1000`.
+Accepted suggestions provide context but do not trigger automatic calibration.
+Processed rejection IDs live in machine-local `state.json`; routine calibration does not rewrite configuration.
+Failed or cancelled runs leave those IDs unprocessed. Successful zero-result runs consume only the rejection IDs they considered.
+
+Calibration uses a dedicated bundled `calibration-prompt.md`, not Pi's coding prompt or the normal reviewer prompt.
+Normal reviewer prompt replacements/appends do not affect calibration. The calibrator has no repository tools.
+Existing preferences are evidence for calibration, not instructions that prevent their revision.
+
+Proposals appear in the existing review list with a **Calibration** label, decision-ID evidence, and a preference-file diff.
+Apply requires confirmation. Pending or rejected Calibration items do not change reviewer behavior.
+Applied preferences extend future ordinary reviewer prompts for this project only; host validation and evidence thresholds remain in force.
+
+A pending Calibration item suppresses further calibration until you apply or reject it.
+Calibration decisions do not count toward the threshold or become future calibration input.
+One run considers at most 30 decisions within a 96 KiB excerpt budget and proposes at most one combined preference edit.
+Omitted rejections remain unprocessed. The preference file is limited to 32 KiB; the complete ordinary reviewer prompt is limited to 64 KiB.
+Manual calibration continues while you chat. Automatic calibration cancels on resumed work.
+The same project review lock excludes overlapping normal and calibration runs.
+
 ## Review Boundaries
 
 The reviewer runs in a separate process with a fresh, nonpersistent session.
@@ -93,7 +123,8 @@ Project instructions and transcript text appear only as evidence. Their contents
 
 The reviewer has two bounded evidence tools: project file listing and project file reading.
 It has no shell or write tools. Hidden directories, dependencies, generated files, and common key files are excluded from discovery.
-Only project `AGENTS.md` files can receive proposed edits, including nested or new files.
+Ordinary reviews can propose edits only to project `AGENTS.md` files, including nested or new files.
+Calibration can target only `.pi/idle-learn/reviewer-preferences.md`.
 Path validation rejects traversal, symlinks, hard links, and targets outside the project.
 
 Each run reviews up to three chunks and produces at most three suggestions. Zero suggestions is normal.
@@ -130,6 +161,7 @@ Consider these `.gitignore` entries for machine-local data. Idle Learn does not 
 ```
 
 Keep or ignore `config.toml` separately, according to the opt-in policy you want.
+Keep or ignore `reviewer-preferences.md` separately, according to whether the project should share approved reviewer preferences.
 
 ## Checks
 

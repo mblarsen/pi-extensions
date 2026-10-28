@@ -130,7 +130,9 @@ The user approved non-blocking manual reviews in PR #50. Automatic idle reviews 
 
 Validation: `npm ci`, `npm run check`, `npx changeset status`, and diff checks pass. All 233 repository tests pass, including 67 Idle Learn tests. The installed Pi 1.4.0 SDK loader also passed the background-review integration suite. Tests confirm that a manual review captures its original entries, returns without a modal, survives resumed chat, reports completion without reopening UI, and rearms idle review for newer messages. Automatic reviews still cancel on resumed work. Live terminal/provider behavior remains a manual check.
 
-Project reviewer preferences from acceptance/rejection history remain a separate design discussion. The name-dice artifacts were inspected read-only. No reviewer-preference learning or name-dice changes are part of this follow-up.
+The user subsequently approved project calibration with a default threshold of three ordinary rejections. Track the approved design and work in [Idle Learn Calibration](2026-10-28-idle-learn-calibration.md). The name-dice artifacts were inspected read-only; this implementation does not modify that project.
+
+Calibration implementation checkpoint: `/idle-learn calibrate`, automatic calibration after three new ordinary rejections, a dedicated no-tool calibration prompt, typed Calibration items in the existing UI, exact preference-path validation, and approval-gated project reviewer preferences are implemented. All 260 repository tests pass, including 94 Idle Learn tests. Full package/type checks, Changeset validation, and installed Pi 1.4.0 loader integration pass. Package contents include `calibration-prompt.md` and exclude tests. Live calibration provider and manual terminal verification remain open.
 
 ## Verification Notes
 

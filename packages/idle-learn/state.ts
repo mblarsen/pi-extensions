@@ -3,7 +3,7 @@ import { validateProposal, type Evidence } from "./store.ts";
 
 export const STATE_PATH = `${DATA_DIR}/state.json`;
 export const OBSERVATIONS_PATH = `${DATA_DIR}/observations.md`;
-export interface Progress { version: 1; reviewed: Record<string, string[]>; audits: Record<string, string> }
+export interface Progress { version: 1; reviewed: Record<string, string[]>; audits: Record<string, string>; calibration?: { rejections: string[] } }
 export interface Observation { lesson: string; category: string; evidence: Evidence[]; created: string }
 export function readProgress(root: string): Progress {
 	const text = readProjectFile(root, STATE_PATH);
@@ -13,7 +13,10 @@ export function readProgress(root: string): Progress {
 		|| !value.audits || typeof value.audits !== "object" || Array.isArray(value.audits)
 		|| !Object.values(value.reviewed).every((ids) => Array.isArray(ids) && ids.every((id) => typeof id === "string"))
 		|| !Object.values(value.audits).every((hash) => typeof hash === "string")) throw new Error("Invalid Idle Learn state.json. Restore or remove the machine-local state file.");
-	return { version: 1, reviewed: value.reviewed, audits: value.audits };
+	if (value.calibration !== undefined && (!value.calibration || typeof value.calibration !== "object"
+		|| Array.isArray(value.calibration) || !Array.isArray(value.calibration.rejections)
+		|| !value.calibration.rejections.every((id: unknown) => typeof id === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)))) throw new Error("Invalid calibration checkpoint in state.json.");
+	return { version: 1, reviewed: value.reviewed, audits: value.audits, ...(value.calibration === undefined ? {} : { calibration: { rejections: value.calibration.rejections } }) };
 }
 
 export function validateObservation(value: unknown, created = new Date().toISOString()): Observation {

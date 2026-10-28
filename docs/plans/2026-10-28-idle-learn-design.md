@@ -12,7 +12,7 @@ The reference is [Amber](https://amber.benhid.dev/) and its [source](https://git
 
 ## Scope
 
-V1 suggests changes to project `AGENTS.md` files, including nested files. It does not change global instructions or create skills.
+Ordinary reviews suggest changes to project `AGENTS.md` files, including nested files. Calibration proposes approval-gated project reviewer preferences in `.pi/idle-learn/reviewer-preferences.md`. Neither changes global instructions or creates skills.
 
 The extension uses the upstream Pi extension API used by this repository. PiG compatibility requires separate API verification. Do not assume upstream Pi flags also work in PiG.
 
@@ -23,6 +23,7 @@ Use one command namespace:
 - `/idle-learn`: show a menu with Review suggestions, Configuration, status, and the pending count.
 - `/idle-learn init`: ask for project opt-in, then create configuration.
 - `/idle-learn analyze`: start a manual background review without the idle delay.
+- `/idle-learn calibrate`: start a manual background calibration from ordinary acceptance/rejection history.
 - `/idle-learn review`: open saved suggestions and offer Analyze now.
 - `/idle-learn config`: edit configuration through a TUI.
 - `/idle-learn cancel`: cancel the active review and pending idle timer.
@@ -71,7 +72,7 @@ Use the extension's system prompt, with these options:
 3. Append a UTF-8 file after the selected base prompt.
 4. Reset to the bundled prompt without an append.
 
-Thus, the effective system prompt is the selected base prompt plus the optional user append. Append does not extend Pi's general coding prompt.
+Thus, the ordinary effective system prompt is the selected base prompt plus the optional user append and approved project reviewer preferences. Append does not extend Pi's general coding prompt.
 
 Resolve prompt-file paths relative to the project directory. Do not silently ignore missing or unreadable files.
 
@@ -138,12 +139,25 @@ Store weak signals across sessions. Expire unconfirmed observations after 60 day
 
 Place folder-specific instructions in that folder's `AGENTS.md`. Otherwise use the root `AGENTS.md`. Suggest new files only within the project.
 
+## Project Reviewer Calibration
+
+See [the approved calibration design and implementation checklist](2026-10-28-idle-learn-calibration.md).
+
+Default to automatic calibration after three new ordinary rejections, at the next idle window. Configure `[calibration].after_rejections` from 0 to 1000; zero is manual-only. The manual command bypasses the threshold. Keep processed rejection IDs in local state, not configuration.
+
+Use a dedicated bundled calibration prompt, no ordinary reviewer overrides, no transcript evidence, and no repository tools. Existing preferences are evidence for calibration, not calibrator instructions. Consider both ordinary acceptance and rejection decisions; never feed calibration decisions back into calibration.
+
+Propose at most one combined edit to the exact reviewer-preferences.md path, with exact decision-ID quotations. Label the item Calibration in the existing list/detail UI. Require normal explicit approval and stale-target checks before it affects future reviews. Pending items suppress further calibration. Successful runs checkpoint only included rejection IDs; failures and cancellation retain them for retry.
+
+Bound decision context to 30 records and 96 KiB of excerpts. Prioritize unprocessed rejections, then recent supporting ordinary decisions. Keep omitted rejection IDs unprocessed. Preferences are limited to 32 KiB and ordinary effective prompts to 64 KiB. A shared project review lease excludes concurrent ordinary and calibration workers.
+
 ## Storage
 
 Keep configuration separate from review artifacts:
 
 ```text
 .pi/idle-learn/config.toml
+.pi/idle-learn/reviewer-preferences.md
 .pi/idle-learn/suggestions/<id>.md
 .pi/idle-learn/rejected/<id>.md
 .pi/idle-learn/applied/<id>.md
@@ -153,11 +167,11 @@ Keep configuration separate from review artifacts:
 
 Suggestion files contain target path, source session and entry references, creation time, title, evidence, and a proposed diff.
 
-State contains local progress, audit hashes, and lock metadata. Recommend ignoring machine-local state. Do not modify `.gitignore` without confirmation.
+State contains local transcript progress, audit hashes, and processed calibration rejection IDs. Separate lock directories carry the review/storage leases. Recommend ignoring machine-local state. Do not modify `.gitignore` without confirmation.
 
 Do not persist the complete transcript in suggestion files. Save only the evidence needed for review.
 
-Use atomic writes and collision-safe suggestion IDs. Reject traversal, absolute targets, symlink escapes, and non-`AGENTS.md` targets.
+Use atomic writes and collision-safe suggestion IDs. Reject traversal, absolute targets, and symlink escapes. Ordinary reviews can target only project AGENTS.md files. Host-selected calibration output can target only the exact project reviewer-preferences.md path.
 
 ## Review interface
 
@@ -179,7 +193,7 @@ Include empty, analyzing, cancelled, error, stale, applied, and rejected states.
 
 ## Configuration interface
 
-Expose enable/pause, idle delay, provider/model/thinking, and prompt replacement/append files.
+Expose enable/pause, idle delay, calibration rejection threshold, provider/model/thinking, and ordinary prompt replacement/append files.
 
 Show inherited versus explicit values clearly. Show the effective model and prompt without exposing credentials.
 

@@ -26,7 +26,7 @@ export class ReviewPanel implements Component {
 	constructor(suggestions: Suggestion[], status: string, theme: Pick<Theme, "fg">, height: () => number,
 		done: (action: ReviewAction) => void, keys?: (data: string, action: "confirm" | "cancel") => boolean) {
 		this.suggestions = suggestions; this.status = status; this.theme = theme; this.height = height; this.done = done; this.keys = keys;
-		this.list = new SelectList(suggestions.map((item) => ({ value: item.id, label: inline(item.title) })), 8, {
+		this.list = new SelectList(suggestions.map((item) => ({ value: item.id, label: `${item.kind === "calibration" ? "[Calibration] " : ""}${inline(item.title)}` })), 8, {
 			selectedPrefix: (text) => this.color("accent", text), selectedText: (text) => this.color("accent", text),
 			description: (text) => this.color("muted", text), scrollInfo: (text) => this.color("dim", text), noMatch: (text) => text,
 		});
@@ -70,6 +70,7 @@ export class ReviewPanel implements Component {
 				for (const wrapped of wrapTextWithAnsi(line || " ", Math.max(1, width))) lines.push(token ? this.color(token, wrapped) : wrapped);
 			}
 		};
+		if (suggestion.kind === "calibration") add("Calibration / Reviewer preferences", "accent");
 		add(suggestion.title, "toolTitle");
 		add(suggestion.target, "muted");
 		add("");
@@ -109,7 +110,7 @@ export class ReviewPanel implements Component {
 		const listing = (columns: number) => this.frame(this.color(this.detail ? "muted" : "accent", `${this.detail ? "" : "› "}Suggestions`), [
 			...this.list.render(columns - 4), "", this.color("dim", `${this.selected + 1} of ${this.suggestions.length}`),
 		], columns, rows);
-		const detail = (columns: number) => this.frame(this.color(this.detail ? "accent" : "muted", `${this.detail ? "› " : ""}Proposed change`), detailLines.slice(this.scroll, this.scroll + rows), columns, rows);
+		const detail = (columns: number) => this.frame(this.color(this.detail ? "accent" : "muted", `${this.detail ? "› " : ""}${this.suggestions[this.selected]?.kind === "calibration" ? "Calibration" : "Proposed change"}`), detailLines.slice(this.scroll, this.scroll + rows), columns, rows);
 		let body: string[];
 		if (this.wide) {
 			body = new HStack([

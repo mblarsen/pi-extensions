@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { readdirSync, unlinkSync } from "node:fs";
 import { requireOptIn } from "./config.ts";
-import { atomicProjectWrite, contentHash, DATA_DIR, isMissing, MAX_FILE_BYTES, projectPath, readProjectFile, targetPath } from "./files.ts";
+import { atomicProjectWrite, contentHash, DATA_DIR, isMissing, MAX_FILE_BYTES, projectPath, readProjectFile } from "./files.ts";
 import { withStorageLock } from "./lock.ts";
+import { PREFERENCES_BYTES, suggestionTargetPath, type SuggestionKind } from "./preferences.ts";
 
 export interface Evidence {
 	session: string;
@@ -10,6 +11,7 @@ export interface Evidence {
 	quote: string;
 }
 export interface Suggestion {
+	kind?: SuggestionKind;
 	id: string;
 	created: string;
 	title: string;
@@ -23,7 +25,7 @@ export interface Suggestion {
 	status: "pending" | "applied" | "rejected";
 	reason?: string;
 }
-export type Proposal = Pick<Suggestion, "title" | "target" | "rationale" | "evidence" | "baseHash" | "before" | "after">;
+export type Proposal = Pick<Suggestion, "title" | "target" | "rationale" | "evidence" | "baseHash" | "before" | "after" | "kind">;
 export type ArtifactFolder = "suggestions" | "applied" | "rejected";
 const MARKER = "\n<!-- idle-learn:artifact -->\n";
 const hashPattern = /^[a-f0-9]{64}$/;
@@ -36,9 +38,10 @@ function text(value: unknown, field: string, limit: number): string {
 	return value;
 }
 
-export function validateProposal(value: unknown): Proposal {
+export function validateProposal(value: unknown, kind: SuggestionKind = "instruction"): Proposal {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a suggestion object.");
 	const input = value as Record<string, unknown>;
+	if (input.kind !== undefined && input.kind !== kind) throw new Error("Suggestion kind does not match the review type.");
 	const evidence = input.evidence;
 	if (!Array.isArray(evidence) || evidence.length < 1 || evidence.length > 12) throw new Error("Supply 1 to 12 evidence quotes.");
 	if (input.baseHash !== null && (typeof input.baseHash !== "string" || !hashPattern.test(input.baseHash))) {
@@ -50,6 +53,7 @@ export function validateProposal(value: unknown): Proposal {
 	if (input.baseHash === null && input.before !== "") throw new Error("New files must have empty before text.");
 	if (input.baseHash !== null && input.before === "") throw new Error("Existing files require a unique before text.");
 	return {
+		...(kind === "calibration" ? { kind } : input.kind === "instruction" ? { kind } : {}),
 		title: text(input.title, "title", 200),
 		target: text(input.target, "target", 4096),
 		rationale: text(input.rationale, "rationale", 4000),
@@ -88,7 +92,7 @@ export function suggestionDiff(suggestion: Proposal): string {
 }
 
 export function serializeSuggestion(suggestion: Suggestion): string {
-	return `# ${suggestion.title}\n\nTarget: ${suggestion.target}\n\n${suggestion.rationale}\n\n## Evidence\n\n${suggestion.evidence.map((item) => `- ${item.session}:${item.entry}\n\n${item.quote}`).join("\n\n")}\n\n## Proposed Edit\n\n\`\`\`diff\n${suggestionDiff(suggestion)}\n\`\`\`\n${MARKER}\`\`\`json\n${JSON.stringify(suggestion, null, 2)}\n\`\`\`\n`;
+	return `# ${suggestion.title}\n\n${suggestion.kind === "calibration" ? "Type: Calibration\n\n" : ""}Target: ${suggestion.target}\n\n${suggestion.rationale}\n\n## Evidence\n\n${suggestion.evidence.map((item) => `- ${item.session}:${item.entry}\n\n${item.quote}`).join("\n\n")}\n\n## Proposed Edit\n\n\`\`\`diff\n${suggestionDiff(suggestion)}\n\`\`\`\n${MARKER}\`\`\`json\n${JSON.stringify(suggestion, null, 2)}\n\`\`\`\n`;
 }
 
 export function parseSuggestion(content: string): Suggestion {
@@ -96,7 +100,7 @@ export function parseSuggestion(content: string): Suggestion {
 	const match = index >= 0 ? /^```json\n([\s\S]+)\n```\n$/.exec(content.slice(index + MARKER.length)) : null;
 	if (!match) throw new Error("Invalid suggestion artifact. Expected machine-readable metadata.");
 	const input = JSON.parse(match[1]);
-	const proposal = validateProposal(input);
+	const proposal = validateProposal(input, input.kind === "calibration" ? "calibration" : "instruction");
 	if (typeof input.id !== "string" || !idPattern.test(input.id)) throw new Error("Invalid suggestion ID.");
 	if (typeof input.created !== "string" || !Number.isFinite(Date.parse(input.created))) throw new Error("Invalid suggestion creation time.");
 	if (typeof input.resultHash !== "string" || !hashPattern.test(input.resultHash)) throw new Error("Invalid suggestion result hash.");
@@ -118,7 +122,7 @@ export function listSuggestions(root: string, folder: ArtifactFolder = "suggesti
 		if (content === null) throw new Error("Suggestion disappeared. Reload the review screen.");
 		const suggestion = parseSuggestion(content);
 		if (suggestion.id !== id) throw new Error("Suggestion ID does not match its filename.");
-		targetPath(root, suggestion.target);
+		suggestionTargetPath(root, suggestion);
 		const expectedStatus = folder === "suggestions" ? "pending" : folder === "applied" ? "applied" : "rejected";
 		if (suggestion.status !== expectedStatus) throw new Error("Suggestion status does not match its folder.");
 		return suggestion;
@@ -129,7 +133,7 @@ function duplicateKey(proposal: Proposal): string {
 	return contentHash(`${proposal.target}\n${proposal.after.replace(/\s+/g, " ").trim().toLowerCase()}`);
 }
 
-export async function saveProposals(root: string, values: unknown[], guard: () => void = () => {}, commitState: () => void = () => {}): Promise<Suggestion[]> {
+export async function saveProposals(root: string, values: unknown[], guard: () => void = () => {}, commitState: () => void = () => {}, kind: SuggestionKind = "instruction"): Promise<Suggestion[]> {
 	if (!Array.isArray(values) || values.length > 3) throw new Error("A review may contain at most three suggestions.");
 	requireOptIn(root);
 	return withStorageLock(root, () => {
@@ -137,11 +141,11 @@ export async function saveProposals(root: string, values: unknown[], guard: () =
 		const known = ["suggestions", "rejected", "applied"].flatMap((folder) => listSuggestions(root, folder as ArtifactFolder));
 		const keys = new Set(known.map(duplicateKey));
 		const suggestions = values.map((value) => {
-			const proposal = validateProposal(value);
-			targetPath(root, proposal.target);
+			const proposal = validateProposal(value, kind);
+			suggestionTargetPath(root, proposal);
 			const current = readProjectFile(root, proposal.target);
 			const result = applyEdit(current, proposal);
-			if (Buffer.byteLength(result) > MAX_FILE_BYTES) throw new Error("Proposed target exceeds the size limit.");
+			if (Buffer.byteLength(result) > (kind === "calibration" ? PREFERENCES_BYTES : MAX_FILE_BYTES)) throw new Error("Proposed target exceeds the size limit.");
 			const key = duplicateKey(proposal);
 			if (keys.has(key)) throw new Error("Duplicate of a saved, applied, or rejected suggestion.");
 			keys.add(key);
@@ -166,7 +170,7 @@ export async function decideSuggestion(root: string, displayed: Suggestion, deci
 		if (JSON.stringify(current) !== JSON.stringify(displayed) || current.status !== "pending") {
 			throw new Error("Suggestion changed. Review it again before deciding.");
 		}
-		targetPath(root, current.target);
+		suggestionTargetPath(root, current);
 		const rejectionReason = reason === undefined || !reason.trim() ? undefined : text(reason.trim(), "rejection reason", 4000);
 		const result: Suggestion = { ...current, status: decision === "apply" ? "applied" : "rejected", ...(decision === "reject" && rejectionReason ? { reason: rejectionReason } : {}) };
 		const folder = decision === "apply" ? "applied" : "rejected";
@@ -180,6 +184,7 @@ export async function decideSuggestion(root: string, displayed: Suggestion, deci
 			if (content === null || contentHash(content) !== current.resultHash) {
 				const updated = applyEdit(content, current);
 				if (contentHash(updated) !== current.resultHash) throw new Error("Suggestion result hash does not match the proposed edit.");
+				if (Buffer.byteLength(updated) > (current.kind === "calibration" ? PREFERENCES_BYTES : MAX_FILE_BYTES)) throw new Error("Proposed target exceeds the size limit.");
 				atomicProjectWrite(root, current.target, updated, content);
 			}
 		}

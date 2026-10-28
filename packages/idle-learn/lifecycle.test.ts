@@ -71,3 +71,35 @@ test("status observers see running true at manual start and false at completion"
 	assert.equal(states[0], true);
 	assert.equal(states.at(-1), false);
 });
+
+test("successful automatic calibration returns to ordinary idle review without looping", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const purposes: Array<string | undefined> = [];
+	let purpose: "calibration" | undefined = "calibration";
+	const reviewer = new IdleReviewer(() => {}, async (input) => {
+		purposes.push(input.purpose); purpose = undefined;
+		return { ...result, message: input.purpose ? "Calibration complete." : "Ordinary complete." };
+	});
+	reviewer.schedule(1000, () => ({ ...snapshot, purpose }));
+	t.mock.timers.tick(1000);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(reviewer.status, "Calibration complete.");
+	t.mock.timers.tick(1000);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	t.mock.timers.tick(100000);
+	assert.deepEqual(purposes, ["calibration", undefined]);
+	await reviewer.cancel();
+});
+
+test("failed automatic calibration is not retried on a timer", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	let calls = 0;
+	const reviewer = new IdleReviewer(() => {}, async () => { calls++; throw new Error("Provider offline"); });
+	reviewer.schedule(1000, () => ({ ...snapshot, purpose: "calibration" }));
+	t.mock.timers.tick(1000);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	t.mock.timers.tick(100000);
+	assert.equal(calls, 1);
+	assert.match(reviewer.status, /offline/);
+	await reviewer.cancel();
+});

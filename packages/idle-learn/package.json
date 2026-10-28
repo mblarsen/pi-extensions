@@ -13,6 +13,7 @@
     "!*.test.ts",
     "worker-launcher.mjs",
     "reviewer-prompt.md",
+    "calibration-prompt.md",
     "README.md",
     "LICENSE"
   ],

@@ -89,6 +89,17 @@ test("wide monochrome view strips layout control sequences and retains focus lab
 	} finally { if (previous === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = previous; }
 });
 
+test("calibration shares the review layout but labels both list and detail", () => {
+	const item = { ...suggestion, kind: "calibration" as const, target: ".pi/idle-learn/reviewer-preferences.md" };
+	const panel = new ReviewPanel([item], "Ready", theme, () => 30, () => {});
+	const wide = stripVTControlCharacters(panel.render(120).join("\n"));
+	assert.match(wide, /\[Calibration\]/);
+	assert.match(wide, /Calibration \/ Reviewer preferences/);
+	assert.match(wide, /reviewer-preferences\.md/);
+	panel.render(80); panel.handleInput("\r");
+	assert.match(panel.render(80).join("\n"), /Calibration \/ Reviewer preferences/);
+});
+
 test("empty, error, small-terminal, and monochrome states stay usable", () => {
 	let action: ReviewAction | undefined;
 	const panel = new ReviewPanel([], "Error: choose a model in configuration, then Analyze now.", theme, () => 24, (value) => { action = value; });

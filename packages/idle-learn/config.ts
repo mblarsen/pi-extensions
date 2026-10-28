@@ -12,13 +12,14 @@ export interface Config {
 	thinking?: ThinkingLevel;
 	prompt_file?: string;
 	append_file?: string;
+	calibration?: { after_rejections: number };
 }
 export type ConfigResult =
 	| { status: "missing"; enabled: false }
 	| { status: "invalid"; enabled: false; error: string }
 	| { status: "ready"; enabled: boolean; config: Config };
 
-const fields = new Set(["enabled", "idle_minutes", "provider", "model", "thinking", "prompt_file", "append_file"]);
+const fields = new Set(["enabled", "idle_minutes", "provider", "model", "thinking", "prompt_file", "append_file", "calibration"]);
 
 export function validateConfig(value: unknown): Config {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a configuration table.");
@@ -47,6 +48,14 @@ export function validateConfig(value: unknown): Config {
 		if (!THINKING_LEVELS.includes(input.thinking as ThinkingLevel)) throw new Error("Unsupported thinking level.");
 		config.thinking = input.thinking as ThinkingLevel;
 	}
+	if (input.calibration !== undefined) {
+		const calibration = input.calibration;
+		if (!calibration || typeof calibration !== "object" || Array.isArray(calibration)
+			|| Object.keys(calibration).some((key) => key !== "after_rejections")) throw new Error("Invalid calibration configuration table.");
+		const count = (calibration as Record<string, unknown>).after_rejections ?? 3;
+		if (!Number.isInteger(count) || Number(count) < 0 || Number(count) > 1000) throw new Error("Set calibration.after_rejections to a whole number from 0 to 1000.");
+		config.calibration = { after_rejections: Number(count) };
+	}
 	return config;
 }
 
@@ -73,7 +82,7 @@ export function loadConfig(root: string): ConfigResult {
 
 /** Call only after the user confirms opt-in. Existing configuration is never replaced. */
 export function initializeConfig(root: string): Config {
-	const config: Config = { enabled: true, idle_minutes: 10 };
+	const config: Config = { enabled: true, idle_minutes: 10, calibration: { after_rejections: 3 } };
 	atomicProjectWrite(root, CONFIG_PATH, serializeConfig(config), null);
 	return config;
 }
