@@ -36,7 +36,7 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 				const next = JSON.stringify(loadConfig(root));
 				if (next !== configSnapshot) {
 					configSnapshot = next;
-					void reviewer.cancel().then(() => { refresh(); if (context) scheduleCalibration(context); });
+					void reviewer.cancel("project configuration changed").then(() => { refresh(); if (context) scheduleCalibration(context); });
 				}
 			});
 			watcher.unref();
@@ -45,8 +45,10 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 	}
 	function snapshot(ctx: ExtensionContext, purpose?: "calibration") {
 		if (!root || !ctx.model) throw new Error("Select a model before analyzing.");
-		requireOptIn(root);
+		const config = requireOptIn(root);
 		if (!ctx.isIdle()) throw new Error("Wait for Pi to finish before analyzing.");
+		// Ignore queued watcher events for settings this job already captured.
+		configSnapshot = JSON.stringify({ status: "ready", enabled: config.enabled, config });
 		return { root, session: ctx.sessionManager.getSessionId(), entries: purpose === "calibration" ? [] : transcriptEntries(ctx.sessionManager.getBranch()), ...(purpose ? { purpose } : {}),
 			provider: ctx.model.provider, model: ctx.model.id, thinking: pi.getThinkingLevel() };
 	}
@@ -69,10 +71,10 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 	pi.on("user_bash", () => { void reviewer.resumeWork(); });
 	pi.on("agent_start", () => { void reviewer.resumeWork(); });
 	pi.on("agent_settled", (_event, ctx) => { schedule(ctx); });
-	pi.on("session_before_tree", async () => { await reviewer.cancel(); });
-	pi.on("session_before_switch", async () => { await reviewer.cancel(); });
-	pi.on("session_before_fork", async () => { await reviewer.cancel(); });
-	pi.on("session_shutdown", async () => { watcher?.close(); watcher = undefined; await reviewer.cancel(); context = undefined; root = undefined; });
+	pi.on("session_before_tree", async () => { await reviewer.cancel("session navigation"); });
+	pi.on("session_before_switch", async () => { await reviewer.cancel("session switch"); });
+	pi.on("session_before_fork", async () => { await reviewer.cancel("session fork"); });
+	pi.on("session_shutdown", async () => { watcher?.close(); watcher = undefined; await reviewer.cancel("session ended or extensions reloaded"); context = undefined; root = undefined; });
 
 	async function view(ctx: ExtensionCommandContext, title: string, body: string) {
 		await ctx.ui.custom<void>((tui, theme, keys, done) => {
@@ -118,9 +120,12 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 			}
 			if (loaded.status !== "ready") return;
 			const config = loaded.config;
-			const label = config.model ? `${config.provider}/${config.model} (explicit)` : `${ctx.model?.provider}/${ctx.model?.id} (follow session)`;
-			const choice = await ctx.ui.select(`Idle Learn / Configuration\n${label}\nThinking: ${config.thinking ?? `${pi.getThinkingLevel()} (follow session)`}`, [
-				`${config.enabled ? "Pause" : "Enable"} analysis`, `Idle delay: ${config.idle_minutes} minutes`, `Calibration: ${config.calibration?.after_rejections === 0 ? "manual only" : `after ${config.calibration?.after_rejections ?? 3} rejections`}`, "Reviewer model", "Thinking level", "Reviewer prompt", "Edit TOML", "Back",
+			const label = config.model ? `${config.provider}/${config.model} (explicit)` : `${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "No model selected"} (follow session)`;
+			const thinking = config.thinking ? `${config.thinking} (explicit)` : `${pi.getThinkingLevel()} (follow session)`;
+			const modelChoice = `Reviewer model: ${label}`;
+			const thinkingChoice = `Thinking level: ${thinking}`;
+			const choice = await ctx.ui.select(`Idle Learn / Configuration\n${label}\nThinking: ${thinking}`, [
+				`${config.enabled ? "Pause" : "Enable"} analysis`, `Idle delay: ${config.idle_minutes} minutes`, `Calibration: ${config.calibration?.after_rejections === 0 ? "manual only" : `after ${config.calibration?.after_rejections ?? 3} rejections`}`, modelChoice, thinkingChoice, "Reviewer prompt", "Edit TOML", "Back",
 			]);
 			if (!choice || choice === "Back") return;
 			const next: Config = { ...config };
@@ -133,7 +138,7 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 				const value = await ctx.ui.input("Calibrate after new rejections (0 = manual only, 1-1000 = threshold)", String(config.calibration?.after_rejections ?? 3));
 				if (value === undefined) continue;
 				next.calibration = { after_rejections: Number(value) };
-			} else if (choice === "Reviewer model") {
+			} else if (choice === modelChoice) {
 				const models = ctx.modelRegistry.getAvailable();
 				const options = ["Follow current session", ...models.map((model) => `${model.provider}/${model.id}`)];
 				const selected = await ctx.ui.select("Reviewer provider and model", options);
@@ -149,7 +154,7 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 						next.thinking = thinking as Config["thinking"];
 					}
 				}
-			} else if (choice === "Thinking level") {
+			} else if (choice === thinkingChoice) {
 				const model = config.model ? ctx.modelRegistry.find(config.provider!, config.model) : ctx.model;
 				if (!model) throw new Error("Reviewer model unavailable. Choose a new reviewer model.");
 				const selected = await ctx.ui.select("Reviewer thinking", ["Follow current session", ...getSupportedThinkingLevels(model)]);
@@ -232,10 +237,14 @@ export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analy
 					choice = selected === "Analyze now" ? "analyze" : selected === "Calibrate reviewer" ? "calibrate" : selected === "Review suggestions" ? "review" : selected === "Cancel review" ? "cancel" : selected === "Configuration" ? "config" : selected === "Initialize project" ? "init" : "";
 				}
 				if (choice === "init") await init(ctx);
-				else if (choice === "config") { await reviewer.cancel(); await configure(ctx); }
+				else if (choice === "config") { await reviewer.cancel("configuration opened"); await configure(ctx); }
 				else if (choice === "analyze") analyzeNow(ctx);
 				else if (choice === "calibrate") analyzeNow(ctx, "calibration");
-				else if (choice === "cancel") { await reviewer.cancel(); ctx.ui.notify("Idle Learn: review stopped. Completed chunks are saved.", "info"); }
+				else if (choice === "cancel") {
+					const running = reviewer.running;
+					await reviewer.cancel();
+					ctx.ui.notify(running ? `Idle Learn: ${reviewer.status}` : "Idle Learn: no review is running.", "info");
+				}
 				else if (choice === "review") await review(ctx);
 				else if (choice) throw new Error("Use /idle-learn [init|analyze|calibrate|review|config|cancel].");
 			} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : String(error), "error"); }

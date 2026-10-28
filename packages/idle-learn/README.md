@@ -28,7 +28,7 @@ After npm publication, install the package with `pi install npm:@mblarsen/pi-idl
 2. Confirm the project path and model usage notice.
 3. Work normally. Idle Learn reviews unseen session entries after ten idle minutes.
 4. Run `/idle-learn review` to inspect saved suggestions.
-5. Run `/idle-learn analyze`, choose Analyze now from the menu, or press `a` in the review screen.
+5. Run `/idle-learn analyze`, choose Analyze now from the menu, or press `a` when the review screen has no pending suggestions.
 
 Analyze now returns immediately to chat. The footer shows progress, and a notification reports completion.
 Manual reviews continue against their captured snapshot while you chat. New messages wait for a later review.
@@ -48,7 +48,7 @@ A committed enabled configuration also enables sessions in that checkout. Keep i
 | `/idle-learn init` | Confirm opt-in and create configuration |
 | `/idle-learn analyze` | Start a manual review in the background |
 | `/idle-learn calibrate` | Propose project reviewer preferences from accepted/rejected suggestions |
-| `/idle-learn review` | Inspect, apply, reject, or analyze now |
+| `/idle-learn review` | Inspect, apply, or reject suggestions; analyze when no suggestions are pending |
 | `/idle-learn cancel` | Stop the active review and pending idle timer |
 | `/idle-learn config` | Change enable/pause, delay, calibration threshold, model, thinking, and prompt files |
 
@@ -56,6 +56,7 @@ In review, use Up/Down or `j`/`k` to select. At narrow widths, press Enter to op
 At wide widths, press Tab or Shift+Tab to switch between list and details.
 The review uses native Pi selection/layout components and `boxen` frames. Empty reviews stay compact; populated views cap their width for readable diffs and show only actions available in the current view.
 Use Up/Down or Page Up/Page Down to scroll details. Press `p` to apply, `r` to reject, or Escape to return.
+Analyze is a session-wide action, not a proposal action. It is unavailable while suggestions are displayed, including Calibration items.
 Apply asks for confirmation and checks the displayed suggestion and current target again. Reject accepts an optional reason.
 
 ## Configuration
@@ -112,7 +113,9 @@ A pending Calibration item suppresses further calibration until you apply or rej
 Calibration decisions do not count toward the threshold or become future calibration input.
 One run considers at most 30 decisions within a 96 KiB excerpt budget and proposes at most one combined preference edit.
 Omitted rejections remain unprocessed. The preference file is limited to 32 KiB; the complete ordinary reviewer prompt is limited to 64 KiB.
-Manual calibration continues while you chat. Automatic calibration cancels on resumed work.
+Manual calibration continues while you chat or open Review suggestions. Automatic calibration cancels on resumed work.
+Configuration changes, session navigation, reload, or explicit cancellation stop a running calibration. The review status shows the cancellation cause; run `/idle-learn calibrate` to retry.
+A calibration started with new settings is not cancelled by a delayed notification for that earlier configuration change.
 The same project review lock excludes overlapping normal and calibration runs.
 
 ## Review Boundaries

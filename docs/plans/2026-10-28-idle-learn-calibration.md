@@ -55,4 +55,12 @@ All 260 repository tests pass, including 94 Idle Learn tests. `npm ci`, `npm run
 
 A real child-worker integration test exercises both normal review and calibration against a local mock provider. Calibration sends the separate system prompt with no tools, no normal review instructions, and no ambient resources. Tests cover default/manual thresholds, bounded decision excerpts, untouched project config, checkpoint preservation and retry, concurrent new rejections, source edits, typed target validation, stale and symlink/hard-link protection, shared lock exclusion, prompt overrides, label rendering, explicit approval, and idle/manual cancellation semantics.
 
+## Calibration Cancellation Follow-Up
+
+An interactive trial showed the generic cancelled/chunk-retry status after starting calibration and opening Review. Opening Review alone preserves a manual calibration in regression tests. A deterministic real-filesystem watcher test reproduced unintended cancellation when configuration was saved immediately before starting calibration: the delayed notification described settings already used by the new job.
+
+Capture the configuration watcher baseline when taking a job snapshot. A queued notification for those settings no longer cancels the job; an actual later configuration change still does. Report calibration-specific cancellation reasons and an explicit calibrate retry command instead of claiming calibration chunks will retry automatically.
+
+All 263 repository tests pass. Added entry-point regressions cover waiting/opening Review, delayed watcher events before job start, and genuine changes during calibration. Full npm ci/check, Changeset/diff validation, and all 16 installed Pi 1.4.0 entry-point tests pass. The exact initiating event in the reported live session remains unconfirmed.
+
 No live paid calibration request or manual terminal calibration trial was performed. name-dice remains unchanged. npm reports the existing five dependency vulnerabilities and install-script approval warnings; no unrelated dependency fixes or script approvals were applied.

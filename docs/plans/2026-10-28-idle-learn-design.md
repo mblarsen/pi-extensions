@@ -24,7 +24,7 @@ Use one command namespace:
 - `/idle-learn init`: ask for project opt-in, then create configuration.
 - `/idle-learn analyze`: start a manual background review without the idle delay.
 - `/idle-learn calibrate`: start a manual background calibration from ordinary acceptance/rejection history.
-- `/idle-learn review`: open saved suggestions and offer Analyze now.
+- `/idle-learn review`: open saved suggestions. Offer Analyze now only when no suggestions are pending; populated list/detail views contain proposal actions and navigation only.
 - `/idle-learn config`: edit configuration through a TUI.
 - `/idle-learn cancel`: cancel the active review and pending idle timer.
 

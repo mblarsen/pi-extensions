@@ -38,6 +38,21 @@ test("narrow review requires opening details before apply and Escape unwinds saf
 	panel.handleInput("\x1b"); assert.equal(actions[1].kind, "close");
 });
 
+test("populated review screens never offer or trigger session analysis", () => {
+	for (const kind of ["instruction", "calibration"] as const) {
+		for (const width of [80, 120]) {
+			const actions: ReviewAction[] = [];
+			const panel = new ReviewPanel([{ ...suggestion, kind }], "Ready", theme, () => 30, (action) => actions.push(action));
+			for (const details of [false, true]) {
+				if (details) panel.handleInput("\r");
+				assert.doesNotMatch(panel.render(width).join("\n"), /a analyze/);
+				panel.handleInput("a");
+				assert.deepEqual(actions, []);
+			}
+		}
+	}
+});
+
 test("details scroll and adapt on resize without hiding actions", () => {
 	let height = 40;
 	const panel = new ReviewPanel([suggestion], "Ready", theme, () => height, () => {});

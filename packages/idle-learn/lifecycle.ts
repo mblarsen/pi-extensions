@@ -7,6 +7,7 @@ export class IdleReviewer {
 	private controller?: AbortController;
 	private active?: Promise<ReviewResult>;
 	private mode?: "idle" | "manual";
+	private cancellationReason?: string;
 	private changed: () => void;
 	private review: typeof analyze;
 	constructor(changed: () => void, review: typeof analyze = analyze) { this.changed = changed; this.review = review; }
@@ -14,11 +15,14 @@ export class IdleReviewer {
 	clearTimer(): void { if (this.timer) clearTimeout(this.timer); this.timer = undefined; }
 	async resumeWork(): Promise<void> {
 		this.clearTimer();
-		if (this.mode !== "manual") await this.cancel();
+		if (this.mode !== "manual") await this.cancel("work resumed");
 	}
-	async cancel(): Promise<void> {
+	async cancel(reason = "stopped by user"): Promise<void> {
 		this.clearTimer();
-		this.controller?.abort();
+		if (this.controller && !this.controller.signal.aborted) {
+			this.cancellationReason = reason;
+			this.controller.abort();
+		}
 		if (this.active) await this.active.catch(() => {});
 	}
 	schedule(milliseconds: number, snapshot: () => Omit<ReviewInput, "signal"> | undefined, shouldContinue: () => boolean = () => false): void {
@@ -38,6 +42,7 @@ export class IdleReviewer {
 		this.clearTimer();
 		const controller = new AbortController();
 		this.controller = controller;
+		this.cancellationReason = undefined;
 		this.mode = mode;
 		this.status = input.purpose === "calibration" ? "Calibrating project reviewer" : mode === "manual" ? "Analyzing snapshot in background" : "Analyzing (resume work to cancel)";
 		const promise = Promise.resolve().then(async () => {
@@ -62,7 +67,11 @@ export class IdleReviewer {
 			this.status = result.message;
 			return result;
 		}, (error) => {
-			this.status = controller.signal.aborted ? "Cancelled. Completed chunks saved; unfinished chunk will retry." : `Error: ${error instanceof Error ? error.message : String(error)}`;
+			this.status = controller.signal.aborted
+				? input.purpose === "calibration"
+					? `Cancelled calibration: ${this.cancellationReason}. Run /idle-learn calibrate to retry.`
+					: `Cancelled review: ${this.cancellationReason}. Completed chunks saved; unfinished work remains unreviewed.`
+				: `Error: ${error instanceof Error ? error.message : String(error)}`;
 			throw error;
 		}).finally(() => {
 			this.active = undefined;

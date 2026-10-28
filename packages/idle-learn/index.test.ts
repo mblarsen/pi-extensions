@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, realpathSync, rmSync, watch } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -83,6 +83,7 @@ async function backgroundFixture(setup?: (root: string) => Promise<void>) {
 	let command!: RegisteredCommand;
 	const notifications: Array<{ message: string; type: string }> = [];
 	const statuses: string[] = [];
+	const menus: Array<{ title: string; options: string[] }> = [];
 	const reviews: ReviewInput[] = [];
 	const selections: string[] = [];
 	const rendered: string[] = [];
@@ -107,11 +108,12 @@ async function backgroundFixture(setup?: (root: string) => Promise<void>) {
 	} as unknown as ExtensionAPI, review, review);
 	const ctx = {
 		cwd: root, mode: "tui", hasUI: true, model: { provider: "test", id: "snapshot-model" }, isIdle: () => idle,
+		modelRegistry: { getAvailable: () => [] },
 		sessionManager: { getSessionId: () => "background-session", getBranch: () => branch },
 		ui: {
 			setStatus(_key: string, value?: string) { statuses.push(value ?? ""); },
 			notify(message: string, type: string) { notifications.push({ message, type }); },
-			select: async () => selections.shift(),
+			select: async (title: string, options: string[]) => { menus.push({ title, options }); return selections.shift(); },
 			input: async () => "Too feature-specific.",
 			confirm: async (title: string, body: string) => { confirmations.push(`${title}\n${body}`); return true; },
 			custom: async (factory: any) => new Promise((resolve) => {
@@ -127,7 +129,7 @@ async function backgroundFixture(setup?: (root: string) => Promise<void>) {
 	const emit = async (event: string) => { for (const handler of handlers.get(event) ?? []) await handler({}, ctx); };
 	await emit("session_start");
 	return {
-		ctx, reviews, notifications, statuses, selections, rendered, confirmations, emit,
+		ctx, reviews, notifications, statuses, selections, rendered, confirmations, menus, emit,
 		command: (args: string) => command.handler(args, ctx),
 		get customCalls() { return customCalls; },
 		setIdle: (value: boolean) => { idle = value; },
@@ -138,6 +140,33 @@ async function backgroundFixture(setup?: (root: string) => Promise<void>) {
 	};
 }
 const settleBackground = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+test("configuration rows show inherited and explicit model and thinking values", async () => {
+	for (const explicit of [false, true]) {
+		const run = await backgroundFixture(async (root) => {
+			if (explicit) saveConfig(root, { enabled: true, idle_minutes: 10, provider: "custom", model: "review-model", thinking: "medium" }, readProjectFile(root, CONFIG_PATH)!);
+		});
+		try {
+			run.selections.push("Back");
+			await run.command("config");
+			const options = run.menus.at(-1)!.options;
+			assert.ok(options.includes(explicit ? "Reviewer model: custom/review-model (explicit)" : "Reviewer model: test/snapshot-model (follow session)"));
+			assert.ok(options.includes(explicit ? "Thinking level: medium (explicit)" : "Thinking level: off (follow session)"));
+		} finally { await run.close(); }
+	}
+});
+
+test("configuration value rows still open model and thinking selectors", async () => {
+	const run = await backgroundFixture();
+	try {
+		run.selections.push("Reviewer model: test/snapshot-model (follow session)", "Follow current session", "Thinking level: off (follow session)", "off", "Back");
+		await run.command("config");
+		assert.ok(run.menus.some((menu) => menu.title === "Reviewer provider and model"));
+		assert.ok(run.menus.some((menu) => menu.title === "Reviewer thinking"));
+		assert.ok(run.menus.at(-1)!.options.includes("Thinking level: off (explicit)"));
+		assert.equal(requireOptIn(run.ctx.cwd).thinking, "off");
+	} finally { await run.close(); }
+});
 
 test("manual analysis returns to chat, keeps its snapshot through chat events, and notifies without reopening UI", async () => {
 	const run = await backgroundFixture();
@@ -226,6 +255,59 @@ test("manual calibration uses the same background status and cancellation flow",
 		assert.equal(run.reviews.length, 1);
 		await run.command("cancel"); await settleBackground();
 		assert.equal(run.reviews[0].signal.aborted, true);
+	} finally { await run.close(); }
+});
+
+test("opening review after waiting preserves a running manual calibration", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const run = await backgroundFixture();
+	try {
+		await run.command("calibrate");
+		t.mock.timers.tick(60_000); await settleBackground();
+		await run.command("review");
+		assert.equal(run.reviews[0].signal.aborted, false);
+		assert.doesNotMatch(run.rendered.at(-1)!, /Cancelled/);
+		run.finish(); await settleBackground();
+		await run.command("review");
+		assert.doesNotMatch(run.rendered.at(-1)!, /Cancelled/);
+	} finally { await run.close(); }
+});
+
+test("a queued config watcher event does not cancel calibration started with the new settings", { timeout: 3000 }, async (t) => {
+	const run = await backgroundFixture();
+	try {
+		const changed = new Promise<void>((resolve) => {
+			const watcher = watch(join(run.ctx.cwd, ".pi/idle-learn"), { signal: t.signal }, (_event, filename) => {
+				if (filename?.toString() === "config.toml") { watcher.close(); resolve(); }
+			});
+		});
+		const previous = readProjectFile(run.ctx.cwd, CONFIG_PATH)!;
+		saveConfig(run.ctx.cwd, { enabled: true, idle_minutes: 5, calibration: { after_rejections: 2 } }, previous);
+		await run.command("calibrate");
+		await changed;
+		await settleBackground();
+		await run.command("review");
+		assert.equal(run.reviews[0].signal.aborted, false);
+		assert.doesNotMatch(run.rendered.at(-1)!, /Cancelled/);
+	} finally { await run.close(); }
+});
+
+test("a configuration change during calibration still cancels it and explains why", { timeout: 3000 }, async (t) => {
+	const run = await backgroundFixture();
+	try {
+		await run.command("calibrate");
+		await new Promise<void>((resolve) => {
+			const watcher = watch(join(run.ctx.cwd, ".pi/idle-learn"), { signal: t.signal }, (_event, filename) => {
+				if (filename?.toString() === "config.toml") { watcher.close(); resolve(); }
+			});
+			const previous = readProjectFile(run.ctx.cwd, CONFIG_PATH)!;
+			saveConfig(run.ctx.cwd, { enabled: true, idle_minutes: 5, calibration: { after_rejections: 2 } }, previous);
+		});
+		await settleBackground();
+		await run.command("review");
+		assert.equal(run.reviews[0].signal.aborted, true);
+		assert.match(run.rendered.at(-1)!, /Cancelled calibration: project configuration changed/);
+		assert.doesNotMatch(run.rendered.at(-1)!, /chunks|will retry/);
 	} finally { await run.close(); }
 });
 

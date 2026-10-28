@@ -36,7 +36,7 @@ export class ReviewPanel implements Component {
 	handleInput(data: string): void {
 		if (this.keys?.(data, "cancel") || matchesKey(data, "escape") || data === "q") {
 			if (this.detail) { this.detail = false; this.scroll = 0; } else this.done({ kind: "close" });
-		} else if (data === "a") this.done({ kind: "analyze" });
+		} else if (data === "a" && !this.suggestions.length) this.done({ kind: "analyze" });
 		else if (data === "p" && this.suggestions[this.selected] && (this.detail || this.wide)) this.done({ kind: "apply", suggestion: this.suggestions[this.selected] });
 		else if (data === "r" && this.suggestions[this.selected] && (this.detail || this.wide)) this.done({ kind: "reject", suggestion: this.suggestions[this.selected] });
 		else if ((matchesKey(data, "enter") || this.keys?.(data, "confirm")) && this.suggestions.length) this.detail = true;
@@ -118,8 +118,8 @@ export class ReviewPanel implements Component {
 				{ component: { render: detail, invalidate() {} }, grow: 1 },
 			], { gap: 1 }).render(width);
 		} else body = this.detail ? detail(width) : listing(width);
-		const actions = this.wide ? "p apply   r reject   a analyze   Tab focus   Esc back/close"
-			: this.detail ? "p apply   r reject   a analyze   Esc back" : "Up/Down select   Enter details   a analyze   Esc close";
+		const actions = this.wide ? "p apply   r reject   Tab focus   Esc back/close"
+			: this.detail ? "p apply   r reject   Esc back" : "Up/Down select   Enter details   Esc close";
 		return [
 			this.color("accent", "Idle Learn") + this.color("muted", ` / Review    ${this.suggestions.length} pending`),
 			this.color(this.status.startsWith("Error:") ? "error" : "muted", inline(this.status)), "",
