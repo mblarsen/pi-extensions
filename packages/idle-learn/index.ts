@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from "node:fs";
-import { BorderedLoader, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { matchesKey, wrapTextWithAnsi, truncateToWidth } from "@earendil-works/pi-tui";
 import { CONFIG_PATH, initializeConfig, loadConfig, parseConfig, requireOptIn, saveConfig, type Config } from "./config.ts";
@@ -7,18 +7,16 @@ import { transcriptEntries } from "./evidence.ts";
 import { projectPath, projectRoot, readProjectFile } from "./files.ts";
 import { IdleReviewer } from "./lifecycle.ts";
 import { ReviewPanel, safeText, type ReviewAction } from "./panel.ts";
-import { effectivePrompt } from "./reviewer.ts";
+import { analyze, effectivePrompt } from "./reviewer.ts";
 import { decideSuggestion, listSuggestions } from "./store.ts";
 
-export default function idleLearn(pi: ExtensionAPI): void {
+export default function idleLearn(pi: ExtensionAPI, reviewEvidence: typeof analyze = analyze): void {
 	let context: ExtensionContext | undefined;
 	let root: string | undefined;
 	let watcher: FSWatcher | undefined;
 	let configSnapshot = "";
-	let renderReviewProgress: (() => void) | undefined;
-	const reviewer = new IdleReviewer(refresh);
+	const reviewer = new IdleReviewer(refresh, reviewEvidence);
 	function refresh() {
-		renderReviewProgress?.();
 		if (!context || !root || !context.hasUI) return;
 		const config = loadConfig(root);
 		if (config.status === "missing") { context.ui.setStatus("idle-learn", undefined); return; }
@@ -57,9 +55,9 @@ export default function idleLearn(pi: ExtensionAPI): void {
 		});
 	}
 	pi.on("session_start", (_event, ctx) => { context = ctx; root = projectRoot(ctx.cwd); refresh(); observeConfig(); });
-	pi.on("input", () => { void reviewer.cancel(); });
-	pi.on("user_bash", () => { void reviewer.cancel(); });
-	pi.on("agent_start", () => { void reviewer.cancel(); });
+	pi.on("input", () => { void reviewer.resumeWork(); });
+	pi.on("user_bash", () => { void reviewer.resumeWork(); });
+	pi.on("agent_start", () => { void reviewer.resumeWork(); });
 	pi.on("agent_settled", (_event, ctx) => { schedule(ctx); });
 	pi.on("session_before_tree", async () => { await reviewer.cancel(); });
 	pi.on("session_before_switch", async () => { await reviewer.cancel(); });
@@ -164,23 +162,19 @@ export default function idleLearn(pi: ExtensionAPI): void {
 			saveConfig(root, next, previous); refresh();
 		}
 	}
-	async function analyzeNow(ctx: ExtensionCommandContext) {
+	function analyzeNow(ctx: ExtensionCommandContext): void {
+		if (reviewer.running) { ctx.ui.notify("Idle Learn: a review is already running. Use /idle-learn cancel to stop it.", "info"); return; }
 		const input = snapshot(ctx);
-		await ctx.ui.custom<void>((tui, theme, _keys, done) => {
-			const loader = new BorderedLoader(tui, theme, "Idle Learn: analyzing evidence. Escape cancels.");
-			loader.onAbort = () => { void reviewer.cancel(); };
-			renderReviewProgress = () => tui.requestRender();
-			void reviewer.start(input).then((result) => {
-				if (result.remaining && root === input.root && ctx.isIdle()) schedule(ctx);
-			}).catch((error) => {
-				if (!loader.signal.aborted) ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-			}).finally(() => { renderReviewProgress = undefined; loader.dispose(); done(); });
-			return {
-				render: (width: number) => [...loader.render(width), truncateToWidth(safeText(reviewer.status), width)],
-				handleInput: (data: string) => loader.handleInput(data),
-				invalidate: () => loader.invalidate(),
-			};
+		const current = () => root === input.root && context?.sessionManager.getSessionId() === input.session;
+		void reviewer.start(input, "manual").then((result) => {
+			if (!current()) return;
+			ctx.ui.notify(`Idle Learn: ${result.message} Use /idle-learn review to inspect suggestions.`, "info");
+			// Work may have finished while this snapshot was still under review.
+			if (ctx.isIdle()) schedule(ctx);
+		}).catch((error) => {
+			if (current() && !reviewer.status.startsWith("Cancelled")) ctx.ui.notify(`Idle Learn: ${error instanceof Error ? error.message : String(error)}`, "error");
 		});
+		ctx.ui.notify("Idle Learn: review started in the background. You can continue chatting. Use /idle-learn cancel to stop it.", "info");
 	}
 	async function review(ctx: ExtensionCommandContext) {
 		if (!root) return;
@@ -195,7 +189,7 @@ export default function idleLearn(pi: ExtensionAPI): void {
 			});
 			if (!action || action.kind === "close") return;
 			try {
-				if (action.kind === "analyze") { await analyzeNow(ctx); status = reviewer.status; }
+				if (action.kind === "analyze") { analyzeNow(ctx); return; }
 				else if ("suggestion" in action) {
 					if (action.kind === "apply" && !await ctx.ui.confirm("Apply this displayed suggestion?", `${safeText(action.suggestion.title)}\nTarget: ${safeText(action.suggestion.target)}\nThe target will be checked for changes before applying.`)) continue;
 					const reason = action.kind === "reject" ? await ctx.ui.input("Rejection reason (optional; Escape cancels rejection)") : undefined;
@@ -209,22 +203,23 @@ export default function idleLearn(pi: ExtensionAPI): void {
 	}
 	pi.registerCommand("idle-learn", {
 		description: "Opt in, review project instruction suggestions, or configure idle learning",
-		getArgumentCompletions: (prefix) => ["init", "review", "config"].filter((value) => value.startsWith(prefix)).map((value) => ({ value, label: value })),
+		getArgumentCompletions: (prefix) => ["init", "analyze", "review", "config", "cancel"].filter((value) => value.startsWith(prefix)).map((value) => ({ value, label: value })),
 		handler: async (args, ctx) => {
 			if (ctx.mode !== "tui") { ctx.ui.notify("Idle Learn commands require interactive terminal mode.", "error"); return; }
 			context = ctx; root ??= projectRoot(ctx.cwd);
-			await reviewer.cancel();
 			try {
 				let choice = args.trim();
 				if (!choice) {
 					const config = loadConfig(root);
-					const selected = await ctx.ui.select(`Idle Learn\nProject: ${root}\n${reviewer.status}\n${config.status === "missing" ? "Not enabled" : config.enabled ? "Enabled" : "Paused or invalid configuration"}\n${config.status === "ready" ? listSuggestions(root).length : 0} pending suggestions`, ["Review suggestions", "Configuration", "Initialize project", "Close"]);
-					choice = selected === "Review suggestions" ? "review" : selected === "Configuration" ? "config" : selected === "Initialize project" ? "init" : "";
+					const selected = await ctx.ui.select(`Idle Learn\nProject: ${root}\n${reviewer.status}\n${config.status === "missing" ? "Not enabled" : config.enabled ? "Enabled" : "Paused or invalid configuration"}\n${config.status === "ready" ? listSuggestions(root).length : 0} pending suggestions`, ["Analyze now", "Review suggestions", ...(reviewer.running ? ["Cancel review"] : []), "Configuration", "Initialize project", "Close"]);
+					choice = selected === "Analyze now" ? "analyze" : selected === "Review suggestions" ? "review" : selected === "Cancel review" ? "cancel" : selected === "Configuration" ? "config" : selected === "Initialize project" ? "init" : "";
 				}
 				if (choice === "init") await init(ctx);
-				else if (choice === "config") await configure(ctx);
+				else if (choice === "config") { await reviewer.cancel(); await configure(ctx); }
+				else if (choice === "analyze") analyzeNow(ctx);
+				else if (choice === "cancel") { await reviewer.cancel(); ctx.ui.notify("Idle Learn: review stopped. Completed chunks are saved.", "info"); }
 				else if (choice === "review") await review(ctx);
-				else if (choice) throw new Error("Use /idle-learn [init|review|config].");
+				else if (choice) throw new Error("Use /idle-learn [init|analyze|review|config|cancel].");
 			} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : String(error), "error"); }
 			finally { refresh(); }
 		},

@@ -6,11 +6,16 @@ export class IdleReviewer {
 	private timer?: ReturnType<typeof setTimeout>;
 	private controller?: AbortController;
 	private active?: Promise<ReviewResult>;
+	private mode?: "idle" | "manual";
 	private changed: () => void;
 	private review: typeof analyze;
 	constructor(changed: () => void, review: typeof analyze = analyze) { this.changed = changed; this.review = review; }
 	get running(): boolean { return this.active !== undefined; }
 	clearTimer(): void { if (this.timer) clearTimeout(this.timer); this.timer = undefined; }
+	async resumeWork(): Promise<void> {
+		this.clearTimer();
+		if (this.mode !== "manual") await this.cancel();
+	}
 	async cancel(): Promise<void> {
 		this.clearTimer();
 		this.controller?.abort();
@@ -18,6 +23,7 @@ export class IdleReviewer {
 	}
 	schedule(milliseconds: number, snapshot: () => Omit<ReviewInput, "signal"> | undefined): void {
 		this.clearTimer();
+		if (this.running) return;
 		this.timer = setTimeout(() => {
 			this.timer = undefined;
 			const input = snapshot();
@@ -27,13 +33,13 @@ export class IdleReviewer {
 		}, milliseconds);
 		this.timer.unref();
 	}
-	start(input: Omit<ReviewInput, "signal">): Promise<ReviewResult> {
+	start(input: Omit<ReviewInput, "signal">, mode: "idle" | "manual" = "idle"): Promise<ReviewResult> {
 		if (this.active) return Promise.reject(new Error("A review is already running for this session."));
 		this.clearTimer();
 		const controller = new AbortController();
 		this.controller = controller;
-		this.status = "Analyzing (resume work to cancel)";
-		this.changed();
+		this.mode = mode;
+		this.status = mode === "manual" ? "Analyzing snapshot in background" : "Analyzing (resume work to cancel)";
 		const promise = Promise.resolve().then(async () => {
 			const suggestions: ReviewResult["suggestions"] = [];
 			let reviewed = 0;
@@ -49,7 +55,7 @@ export class IdleReviewer {
 				this.remaining = remaining;
 				if (!remaining || !result.reviewed || suggestions.length >= 3) break;
 			}
-			return { suggestions, reviewed, remaining, message: `${reviewed} entries reviewed; ${suggestions.length} suggestions. ${remaining ? `${remaining} entries remain; run Analyze now or wait for the next idle period.` : "Caught up with this branch."}` };
+			return { suggestions, reviewed, remaining, message: `${reviewed} entries reviewed; ${suggestions.length} suggestions. ${remaining ? `${remaining} entries remain; run Analyze now or wait for the next idle period.` : mode === "manual" ? "Captured snapshot reviewed." : "Caught up with this branch."}` };
 		});
 		this.active = promise.then((result) => {
 			this.status = result.message;
@@ -60,8 +66,10 @@ export class IdleReviewer {
 		}).finally(() => {
 			this.active = undefined;
 			this.controller = undefined;
+			this.mode = undefined;
 			this.changed();
 		});
+		this.changed();
 		return this.active;
 	}
 }

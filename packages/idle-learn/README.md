@@ -28,7 +28,11 @@ After npm publication, install the package with `pi install npm:@mblarsen/pi-idl
 2. Confirm the project path and model usage notice.
 3. Work normally. Idle Learn reviews unseen session entries after ten idle minutes.
 4. Run `/idle-learn review` to inspect saved suggestions.
-5. Press `a` in the review screen to analyze now.
+5. Run `/idle-learn analyze`, choose Analyze now from the menu, or press `a` in the review screen.
+
+Analyze now returns immediately to chat. The footer shows progress, and a notification reports completion.
+Manual reviews continue against their captured snapshot while you chat. New messages wait for a later review.
+Use `/idle-learn cancel` to stop a review. Completed chunks remain saved.
 
 Nothing runs before project opt-in. Init creates `.pi/idle-learn/config.toml` and never overwrites an existing file.
 
@@ -42,7 +46,9 @@ A committed enabled configuration also enables sessions in that checkout. Keep i
 | --- | --- |
 | `/idle-learn` | Show project status, pending count, and menu |
 | `/idle-learn init` | Confirm opt-in and create configuration |
+| `/idle-learn analyze` | Start a manual review in the background |
 | `/idle-learn review` | Inspect, apply, reject, or analyze now |
+| `/idle-learn cancel` | Stop the active review and pending idle timer |
 | `/idle-learn config` | Change enable/pause, delay, model, thinking, and prompt files |
 
 In review, use Up/Down or `j`/`k` to select. At narrow widths, press Enter to open details.
@@ -93,10 +99,13 @@ Path validation rejects traversal, symlinks, hard links, and targets outside the
 Each run reviews up to three chunks and produces at most three suggestions. Zero suggestions is normal.
 Chunks use a 48 KiB transcript budget, including up to 8 KiB of overlap from the preceding two conversation turns. Idle Learn prefers turn boundaries and limits each tool-result entry to a 4 KiB excerpt so large outputs do not hide later user corrections.
 Overlap preserves source entry IDs and does not count as repeated evidence. Successful chunks checkpoint their entry IDs; branch changes retain shared progress without skipping unseen branch entries.
-The review screen shows the active chunk. Results show entries reviewed and the remaining backlog. If the run limit leaves a backlog, analysis continues after another idle delay, or you can press `a` to resume sooner.
+The footer shows the active chunk. Results show entries reviewed and the remaining backlog. If the run limit leaves a backlog, analysis continues after another idle delay, or you can press `a` to resume sooner.
 Weak evidence remains in observations for up to 60 days. Rejections help suppress repeated proposals.
 
-Each chunk can last up to three minutes, with at most three worker calls per run. Work resumption, navigation, shutdown, and configuration changes cancel active reviews.
+Each chunk can last up to three minutes, with at most three worker calls per run.
+Resuming work cancels automatic idle reviews, but manual reviews continue on their original snapshot.
+Navigation, shutdown, configuration changes, and `/idle-learn cancel` stop either kind. Opening configuration also stops the active review.
+Opening saved suggestions does not cancel a manual review. Reviews never open the review screen automatically.
 Only successful storage advances progress. Completed chunks stay saved if a later chunk fails or is cancelled; the unfinished chunk remains available for the next review. Failures do not schedule automatic retries.
 Oversized conversational entries cause an error instead of silent omission. Split large pasted messages before retrying. Tool-result excerpts retain their beginning and end and explicitly mark omitted content.
 A project lock prevents overlapping reviewers across Pi processes. A stopped owner's lock expires after 30 seconds.

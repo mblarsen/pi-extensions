@@ -22,10 +22,12 @@ Use one command namespace:
 
 - `/idle-learn`: show a menu with Review suggestions, Configuration, status, and the pending count.
 - `/idle-learn init`: ask for project opt-in, then create configuration.
+- `/idle-learn analyze`: start a manual background review without the idle delay.
 - `/idle-learn review`: open saved suggestions and offer Analyze now.
 - `/idle-learn config`: edit configuration through a TUI.
+- `/idle-learn cancel`: cancel the active review and pending idle timer.
 
-Analyze now starts a review without the idle delay. It requires project opt-in and must not overlap another project review.
+Analyze now requires project opt-in and must not overlap another project review. It closes the review screen and returns immediately to chat. Show progress in the footer and notify on completion without opening another screen. Manual reviews continue against their captured snapshot when chat resumes. New entries wait for a later review.
 
 ## Project opt-in
 
@@ -93,7 +95,7 @@ The extension validates reviewer output and writes suggestion artifacts. Prompt 
 2. Reset the timer when another turn starts.
 3. After ten quiet minutes, snapshot the current branch and model settings.
 4. Acquire a project review lock and analyze unseen entries.
-5. If the user starts another turn, cancel the review and discard its uncommitted results.
+5. If the user starts another turn, cancel an automatic idle review and discard its uncommitted results. Keep a manually started review running.
 6. After successful validation and storage, advance review progress.
 
 Run at most one reviewer per project across Pi processes. Recover stale locks after worker termination.
@@ -108,7 +110,7 @@ Use a 48 KiB transcript budget per chunk, reserving up to 8 KiB for overlap from
 
 Treat reviewed session/entry IDs as branch-aware checkpoints. Include overlap only from the current branch, preserve its source IDs, and never count a repeated appearance as independent evidence. New suggestions must cite new evidence unless this is a changed-instruction audit.
 
-Continue automatically through at most three chunks and three suggestions per run. Snapshot entries and model settings once per run. Each chunk retains the three-minute timeout. Show the active chunk, reviewed-entry count, and remaining backlog. When a successful run reaches its limit with work left, schedule another run after the configured idle delay; Analyze now can resume sooner. Any resumed activity cancels the active run and its continuation timer.
+Continue automatically through at most three chunks and three suggestions per run. Snapshot entries and model settings once per run. Each chunk retains the three-minute timeout. Show the active chunk, reviewed-entry count, and remaining backlog. When a successful run reaches its limit with work left, schedule another run after the configured idle delay; Analyze now can resume sooner. Resumed activity cancels automatic idle runs and pending continuation timers. Manual runs continue on their original snapshot. Navigation, shutdown, configuration changes, and explicit cancellation stop either kind. Do not schedule competing reviews while a run is active. When a manual run finishes while Pi is idle, restart the idle timer so newer entries can be reviewed later.
 
 Bound worker duration and evidence size. Never mark omitted entries as reviewed. Surface failures through status without interrupting normal conversation.
 

@@ -115,6 +115,23 @@ The interactive trial showed that width-bound tests did not ensure a usable comp
 
 Follow-up validation: inspected component-rendered output for the reported empty state and populated wide/narrow views. Added regression tests for compact empty geometry, contextual actions, aligned rounded borders, edit-before-evidence ordering, reverse focus navigation, and monochrome escape stripping. All 224 repository tests pass, including 58 Idle Learn tests. Typechecking, pack checks, Changeset validation, diff checks, and extension loading through the installed Pi 1.4.0 SDK pass. An actual terminal/theme trial remains a manual check; rendered-line inspection does not establish color contrast or terminal-specific glyph appearance.
 
+## Background Manual Review Follow-Up
+
+The user approved non-blocking manual reviews in PR #50. Automatic idle reviews still cancel on resumed work; manual reviews continue against their captured snapshot.
+
+- [x] Return to chat immediately after Analyze now and show progress in the existing footer.
+- [x] Notify on completion or failure without opening a review screen.
+- [x] Preserve manual reviews across chat/input/bash/agent events and when opening saved suggestions.
+- [x] Retain explicit, navigation, shutdown, and configuration cancellation for both review modes.
+- [x] Add discoverable Analyze now and Cancel review menu actions and matching subcommands.
+- [x] Avoid competing idle timers during a manual review; restart idle scheduling after completion when idle.
+- [x] Add integration tests for background launch, snapshot stability, cancellation boundaries, duplicate starts, completion, and provider errors.
+- [x] Run full repository/package checks and installed Pi loader tests before updating PR #50.
+
+Validation: `npm ci`, `npm run check`, `npx changeset status`, and diff checks pass. All 233 repository tests pass, including 67 Idle Learn tests. The installed Pi 1.4.0 SDK loader also passed the background-review integration suite. Tests confirm that a manual review captures its original entries, returns without a modal, survives resumed chat, reports completion without reopening UI, and rearms idle review for newer messages. Automatic reviews still cancel on resumed work. Live terminal/provider behavior remains a manual check.
+
+Project reviewer preferences from acceptance/rejection history remain a separate design discussion. The name-dice artifacts were inspected read-only. No reviewer-preference learning or name-dice changes are part of this follow-up.
+
 ## Verification Notes
 
 At the initial implementation checkpoint, all 213 repository tests passed, including 47 Idle Learn tests. `npm ci`, full `npm run check`, `npx changeset status`, and `git diff --check` pass. Pack inspection confirms the extension, worker launcher, bundled prompt, README, and license are present, with no tests.
