@@ -1,0 +1,20 @@
+{
+  "name": "@mblarsen/pi-switch",
+  "version": "0.1.0",
+  "description": "Switch between Pi and PiG in the same terminal and session.",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "pi-switch": "./launcher.mjs" },
+  "engines": { "node": ">=22.14.0" },
+  "keywords": ["pi-package", "pi-extension"],
+  "files": ["index.ts", "control.ts", "launcher.mjs", "README.md", "LICENSE"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mblarsen/pi-extensions.git",
+    "directory": "packages/switch"
+  },
+  "publishConfig": { "access": "public" },
+  "pi": { "extensions": ["./index.ts"] },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*" },
+  "author": "Michael Bøcker-Larsen"
+}

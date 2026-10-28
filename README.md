@@ -16,6 +16,7 @@ Independent npm packages for the [Pi coding agent](https://github.com/earendil-w
 | [`@mblarsen/pi-observational-memory-leanctx-bridge`](packages/pi-observational-memory-leanctx-bridge/) | Store observational memories in Lean Context with exact evidence recall. |
 | [`@mblarsen/pi-session-handoff`](packages/session-handoff/) | Warn when a session is expensive or stale enough to hand off. |
 | [`@mblarsen/pi-slack-emojis`](packages/slack-emojis/) | Convert Slack and GitHub emoji shortcodes. |
+| [`@mblarsen/pi-switch`](packages/switch/) | Switch between Pi and PiG in the same terminal and session. |
 | [`@mblarsen/pi-task-ui`](packages/task-ui/) | Show backend-neutral task state in a Pi sidebar. |
 | [`@mblarsen/pi-update-changelog`](packages/update-changelog/) | View changelogs and update installed Pi packages. |
 | [`@mblarsen/pi-workmux-rename`](packages/workmux-rename/) | Rename a workmux worktree and move its Pi session. |

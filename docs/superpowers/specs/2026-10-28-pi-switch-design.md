@@ -1,6 +1,6 @@
 # pi-switch design
 
-Status: proposed implementation design, pending written-spec review.
+Status: approved and implemented. Final validation is recorded below.
 
 ## Goal
 
@@ -68,13 +68,21 @@ Do not attempt terminal keystroke injection, detached terminal reopening, or pro
 5. Capture the absolute session path, session ID, active leaf, and host working directory.
 6. Submit a validated handoff request to the launcher.
 7. Notify the user and request graceful host shutdown.
-8. Wait for successful host exit and consume the request exactly once.
-9. Start the target with `--session <absolute-path>` in the captured working directory.
+8. Append a custom handoff checkpoint through the extension API during shutdown.
+   The checkpoint persists the active branch without adding model context.
+   Confirm the checkpoint leaf with the launcher, then wait for successful host exit.
+   Consume the confirmed request exactly once.
+9. Start the target with `--session <session-id>` in the captured working directory.
+   Use the full session ID, not a partial UUID.
+   Do not add `--session-dir`.
+   Verify that ID lookup selects the original session during integration tests.
 10. Verify the resumed session identity and active branch before treating the handoff as complete.
 
 The extension must not rewrite session JSONL directly.
-If the target does not restore the active branch through normal resume, test a supported session API restoration step.
-Block release if exact branch preservation cannot be demonstrated safely.
+An actual-host test showed that ID-based resume does not retain an unpersisted tree cursor.
+The shutdown checkpoint solves this through `appendEntry`, without navigating the target or requesting a summary.
+The target verifies the checkpoint leaf, whose parent is the outgoing active leaf.
+Earlier entries remain unchanged, including entries on other branches.
 
 ## Safety and failure behavior
 
@@ -117,6 +125,8 @@ Verify Pi-to-PiG-to-Pi and PiG-to-Pi-to-PiG transitions without model requests.
 Verify session identity, branch selection, messages, tool results, compaction, custom entries, and unknown fields.
 Verify same-terminal input, resize, interrupt, normal exit, and target startup failure through a pseudo-terminal.
 Record the tested host versions and any compatibility limits.
+The programs must already be configured to discover the same session by ID.
+Tests use shared temporary session storage and never pass `--session-dir` during handoff.
 
 Run PiG extension validation without installation.
 Add a minor changeset for the new package's switch commands.
@@ -138,3 +148,20 @@ Failures before shutdown retain the current program.
 Failures after shutdown provide recovery rather than a false rollback guarantee.
 The launcher owns process transitions, while the extension owns session validation.
 No unrelated package changes belong to this work.
+
+## Implementation and validation record
+
+- Package: `packages/switch`, with an extension and executable Node launcher.
+- Protocol: private Unix socket, per-host token, prepare, shutdown confirmation, and target readiness check.
+- Handoff confirmation expires after 15 seconds. Failed or missing confirmation does not start the target.
+- Initial management commands pass through without extension injection.
+- Pi 1.4.0 and PiG 0.5.3 completed all four pseudo-terminal cases: both directions, with and without tree navigation.
+- The smoke tests verified identity, branch checkpoints, tool results, compaction, unknown data, terminal resizing, and normal exit.
+- `npm ci`, `npm run check` (167 tests, typecheck, and package dry runs), and `npx changeset status` passed.
+- PiG extension validation passed with both commands and both lifecycle handlers registered.
+- Package dry runs include the extension, control client, and launcher, and exclude tests.
+- npm reported five dependency audit findings. No dependency remediation was included in this change.
+- Installed a packed local copy without npm publication and configured `pi`/`pig` shell functions to use the launcher.
+- Michael confirmed switching works after restarting the shell and using a persistent session instead of `--no-session`.
+- Pre-commit validation passed again: `npm ci`, `npm run check` (167 tests, typecheck, and package dry runs), and `npx changeset status`.
+- npm publication and changes to existing live sessions remain outside this implementation run.
