@@ -1,7 +1,7 @@
 # Idle Learn
 
 Date: 2026-10-28
-Status: Draft for user review
+Status: Approved for implementation
 Package: `@mblarsen/pi-idle-learn`
 
 ## Purpose
@@ -73,7 +73,13 @@ Thus, the effective system prompt is the selected base prompt plus the optional 
 
 Resolve prompt-file paths relative to the project directory. Do not silently ignore missing or unreadable files.
 
-Disable session persistence, skills, extensions, unrelated resource discovery, and inherited global instructions in the reviewer. Verify the exact Pi flags and defaults before implementation.
+Disable session persistence, skills, extensions, unrelated resource discovery, and inherited project and global instructions in the reviewer.
+
+Verified CLI controls include `--no-session`, `--no-extensions`, `--no-skills`, `--no-prompt-templates`, `--no-themes`, and `--no-context-files`. Disable MCP where supported. `--system-prompt` accepts text or an existing file path. It replaces the coding preamble, but does not disable context-file discovery.
+
+`--no-context-files` prevents automatic `AGENTS.md` and `CLAUDE.md` injection. Files supplied deliberately remain evidence, not instructions. State this rule explicitly in the reviewer prompt.
+
+Built-in read-only tools do not restrict access to the project. Use host-restricted evidence tools through an isolated SDK worker. Verify isolation against the repository dependency, not only the installed CLI.
 
 Provide the transcript, relevant project instructions, previous suggestions, rejections, and observations as evidence. Do not interpret their contents as reviewer instructions.
 
@@ -94,7 +100,15 @@ Run at most one reviewer per project across Pi processes. Recover stale locks af
 
 Identify reviewed entries by session and branch ancestry, not a transcript byte offset. Branches must not cause skipped or duplicate evidence.
 
-Failures and cancellation never advance progress. Do not loop automatically on failures while no new activity occurs.
+Each successful chunk advances progress independently. Failures and cancellation leave the unfinished chunk unreviewed and retain completed chunks. Do not loop automatically on failures while no new activity occurs.
+
+### Chunked backlog review
+
+Use a 48 KiB transcript budget per chunk, reserving up to 8 KiB for overlap from the preceding two conversation turns. Prefer turn boundaries; split exceptionally large turns at entry boundaries. Fail visibly for a conversational entry that exceeds the new-evidence budget. Bound each tool-result entry to a 4 KiB beginning/end excerpt with an explicit omission marker.
+
+Treat reviewed session/entry IDs as branch-aware checkpoints. Include overlap only from the current branch, preserve its source IDs, and never count a repeated appearance as independent evidence. New suggestions must cite new evidence unless this is a changed-instruction audit.
+
+Continue automatically through at most three chunks and three suggestions per run. Snapshot entries and model settings once per run. Each chunk retains the three-minute timeout. Show the active chunk, reviewed-entry count, and remaining backlog. When a successful run reaches its limit with work left, schedule another run after the configured idle delay; Analyze now can resume sooner. Any resumed activity cancels the active run and its continuation timer.
 
 Bound worker duration and evidence size. Never mark omitted entries as reviewed. Surface failures through status without interrupting normal conversation.
 
@@ -187,4 +201,4 @@ Before a package commit, run `npm ci`, `npm run check`, and `npx changeset statu
 
 ## Implementation gate
 
-Review and approve this spec before implementation. Verify exact Pi subprocess isolation controls before choosing the worker launch mechanism.
+The user approved implementation after confirming reviewer isolation and evidence handling. Track implementation and verification in `docs/plans/2026-10-28-idle-learn-implementation.md`.
