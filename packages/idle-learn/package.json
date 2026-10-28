@@ -1,6 +1,6 @@
 {
   "name": "@mblarsen/pi-idle-learn",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Learn from idle Pi sessions and review proposed project instruction changes.",
   "license": "MIT",
   "type": "module",
