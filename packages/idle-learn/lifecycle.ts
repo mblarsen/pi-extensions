@@ -51,10 +51,11 @@ export class IdleReviewer {
 			let remaining = 0;
 			for (let chunk = 1; chunk <= 3; chunk++) {
 				controller.signal.throwIfAborted();
-				this.status = input.purpose === "calibration" ? "Calibrating project reviewer" : `Analyzing chunk ${chunk}/3${chunk > 1 ? `; ${remaining} entries remain` : ""}`;
+				this.status = input.purpose === "calibration" ? "Calibrating project reviewer" : input.guidance ? "Analyzing recent conversation with guidance" : `Analyzing chunk ${chunk}/3${chunk > 1 ? `; ${remaining} entries remain` : ""}`;
 				this.changed();
 				const result = await this.review({ ...input, signal: controller.signal, suggestionLimit: 3 - suggestions.length });
 				if (input.purpose === "calibration") return result;
+				if (input.guidance) return { ...result, remaining: 0, message: `${result.reviewed} recent entries reviewed with guidance; ${result.suggestions.length} suggestions. Normal analysis progress unchanged.` };
 				suggestions.push(...result.suggestions);
 				reviewed += result.reviewed;
 				remaining = result.remaining ?? 0;

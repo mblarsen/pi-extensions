@@ -6,11 +6,12 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { initializeConfig, CONFIG_PATH, saveConfig } from "./config.ts";
 import { transcriptEntries } from "./evidence.ts";
-import { readProjectFile } from "./files.ts";
+import { contentHash, readProjectFile } from "./files.ts";
+import { refreshSuggestion } from "./refresh.ts";
 import { IdleReviewer } from "./lifecycle.ts";
 import { analyze, effectivePrompt, type ReviewInput } from "./reviewer.ts";
 import { readObservations, readProgress, STATE_PATH } from "./state.ts";
-import { decideSuggestion, listSuggestions } from "./store.ts";
+import { decideSuggestion, listSuggestions, saveProposals } from "./store.ts";
 import { calibrate } from "./calibration.ts";
 
 const directories: string[] = [];
@@ -57,6 +58,32 @@ test("successful analysis validates evidence, stores suggestions, and advances o
 	let called = false;
 	await analyze(input(root), async () => { called = true; return output(); });
 	assert.equal(called, false);
+});
+
+test("guided analysis revisits reviewed evidence without advancing checkpoints or audits", async () => {
+	const root = fixture();
+	await analyze(input(root), async () => ({ suggestions: [], observations: [] }));
+	const before = readProgress(root);
+	writeFileSync(join(root, "AGENTS.md"), "# New instructions\n");
+	const entries = [...input(root).entries, { id: "new-entry", text: "[user]\nKeep guidance concise." }];
+	const result = await analyze(input(root, { entries, guidance: "Include the guidance we discussed." }), async (request) => {
+		const evidence = JSON.parse(request.evidence);
+		assert.equal(evidence.guidance, "Include the guidance we discussed.");
+		assert.deepEqual(evidence.entries.map((entry: any) => entry.id), ["user-1", "new-entry"]);
+		return { ...output(), suggestions: [{ ...output().suggestions[0], baseHash: contentHash("# New instructions\n"), before: "# New instructions\n" }] };
+	});
+	assert.equal(result.suggestions.length, 1);
+	assert.equal(result.remaining, 0);
+	assert.deepEqual(readProgress(root), before);
+});
+
+test("guided analysis retains evidence validation and rejects oversized guidance", async () => {
+	const root = fixture();
+	await assert.rejects(() => analyze(input(root, { guidance: "x".repeat(8193) }), async () => output()), /8 KiB/);
+	const invalid = output();
+	invalid.suggestions[0].evidence[0].quote = "Invented";
+	await assert.rejects(() => analyze(input(root, { guidance: "Please add this" }), async () => invalid));
+	assert.deepEqual(listSuggestions(root), []);
 });
 
 test("malformed, fabricated, and insufficient evidence never advances progress", async () => {
@@ -162,7 +189,7 @@ test("lifecycle cancels work and clears idle scheduling without retry loops", as
 	assert.equal(calls, 1);
 });
 
-test("packaged review and calibration workers complete without ambient resources", { timeout: 30_000 }, async () => {
+test("packaged review, calibration, and refresh workers complete without ambient resources", { timeout: 30_000 }, async () => {
 	const root = fixture();
 	const agent = fixture(false);
 	mkdirSync(join(root, ".pi/extensions"));
@@ -200,6 +227,16 @@ test("packaged review and calibration workers complete without ambient resources
 		assert.deepEqual(requests[1].tools ?? [], []);
 		assert.match(JSON.stringify(requests[1].messages[0]), /You calibrate Idle Learn/);
 		assert.doesNotMatch(JSON.stringify(requests[1]), /AMBIENT_GLOBAL|AMBIENT_SYSTEM|expert coding assistant|You review project session evidence/);
+		writeFileSync(join(root, "AGENTS.md"), "Original instruction.\n");
+		const [pending] = await saveProposals(root, [{ title: "Updated instruction", target: "AGENTS.md", rationale: "User correction", evidence: [{ session: "s1", entry: "e1", quote: "Use this instruction." }], baseHash: contentHash("Original instruction.\n"), before: "Original", after: "Updated" }]);
+		writeFileSync(join(root, "AGENTS.md"), "Preserve this.\nOriginal instruction.\n");
+		nextOutput = { before: "Original", after: "Updated" };
+		await refreshSuggestion(input(root, { provider: "idle-test" }), pending);
+		assert.equal(requests.length, 3);
+		assert.deepEqual(requests[2].tools ?? [], []);
+		assert.match(JSON.stringify(requests[2].messages[0]), /You reconcile one saved Idle Learn suggestion/);
+		assert.doesNotMatch(JSON.stringify(requests[2]), /AMBIENT_GLOBAL|AMBIENT_SYSTEM|expert coding assistant/);
+		assert.equal(readProjectFile(root, "AGENTS.md"), "Preserve this.\nOriginal instruction.\n");
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		await new Promise<void>((resolve) => server.close(() => resolve()));

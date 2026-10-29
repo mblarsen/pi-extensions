@@ -17,6 +17,21 @@ function bounded(entry: TranscriptEntry): TranscriptEntry {
 	return { ...entry, text: `${prefix(entry.text, 2800)}\n[Tool output omitted for review size limits]\n${buffer.subarray(start).toString("utf8")}` };
 }
 
+/** Capture the newest bounded evidence without consulting or advancing checkpoints. */
+export function selectRecentChunk(entries: TranscriptEntry[]): ReviewChunk {
+	const selected: TranscriptEntry[] = [];
+	let bytes = 0;
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = bounded(entries[index]);
+		const size = Buffer.byteLength(JSON.stringify(entry));
+		if (size > CHUNK_BYTES && !selected.length) throw new Error(`Entry ${entry.id} exceeds the evidence limit. Split large conversational messages before retrying.`);
+		if (bytes + size > CHUNK_BYTES) break;
+		selected.unshift(entry);
+		bytes += size;
+	}
+	return { entries: selected, overlap: [], remaining: 0 };
+}
+
 export interface ReviewChunk { entries: TranscriptEntry[]; overlap: TranscriptEntry[]; remaining: number }
 
 export function selectChunk(entries: TranscriptEntry[], reviewed: string[], maxBytes = CHUNK_BYTES): ReviewChunk {

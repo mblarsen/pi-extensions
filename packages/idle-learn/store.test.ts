@@ -30,7 +30,7 @@ function proposal(overrides: Partial<Proposal> = {}): Proposal {
 test("suggestion operations cannot opt in a missing project", async () => {
 	const root = fixture(false);
 	await assert.rejects(() => saveProposals(root, [proposal()]), /init/);
-	await assert.rejects(() => acquireProjectLock(root, "review"), /init/);
+	await assert.rejects(() => acquireProjectLock(root, "integration", "batch"), /init/);
 	assert.throws(() => listSuggestions(root), /init/);
 	assert.deepEqual(readdirSync(root), []);
 });
@@ -73,7 +73,6 @@ test("paused projects can review saved suggestions but cannot save new analysis"
 	saveConfig(root, { enabled: false, idle_minutes: 10 }, previous);
 	assert.equal(listSuggestions(root).length, 1);
 	await assert.rejects(() => saveProposals(root, []), /paused/);
-	await assert.rejects(() => acquireProjectLock(root, "review"), /paused/);
 	await decideSuggestion(root, suggestion, "reject");
 	assert.equal(listSuggestions(root, "rejected").length, 1);
 });
@@ -165,30 +164,32 @@ test("an interrupted archive operation can finish without repeating a target edi
 
 test("live locks exclude peers, release is idempotent, and dead-worker locks expire", async () => {
 	const root = fixture();
-	const first = await acquireProjectLock(root, "review");
+	const first = await acquireProjectLock(root, "integration", "batch-a");
 	try {
 		first.assertHeld();
-		await assert.rejects(() => acquireProjectLock(root, "review"), /already being held/);
+		await assert.rejects(() => acquireProjectLock(root, "integration", "batch-a"), /already being held/);
+		const other = await acquireProjectLock(root, "integration", "batch-b");
+		await other.release();
 	} finally {
 		await first.release();
 	}
 	await first.release();
 	assert.throws(() => first.assertHeld(), /released/);
-	const lockPath = join(root, DATA_DIR, "review.lock");
+	const lockPath = join(root, DATA_DIR, `integration-${contentHash("batch-a")}.lock`);
 	mkdirSync(lockPath);
 	const old = new Date(Date.now() - 60_000);
 	utimesSync(lockPath, old, old);
-	const recovered = await acquireProjectLock(root, "review");
+	const recovered = await acquireProjectLock(root, "integration", "batch-a");
 	await recovered.release();
 });
 
-test("review locks exclude another Node process and recover after owner termination", async () => {
+test("integration locks exclude another Node process and recover after owner termination", async () => {
 	const root = fixture();
 	const moduleUrl = new URL("./lock.ts", import.meta.url).href;
 	const script = `
 		import { acquireProjectLock } from ${JSON.stringify(moduleUrl)};
 		try {
-			const lock = await acquireProjectLock(process.argv[1], 'review');
+			const lock = await acquireProjectLock(process.argv[1], 'integration', 'batch');
 			process.stdout.write('acquired');
 			if (process.argv[2] === 'leave-lock') process.kill(process.pid, 'SIGKILL');
 			await lock.release();
@@ -197,7 +198,7 @@ test("review locks exclude another Node process and recover after owner terminat
 	const run = (leaveLock = false) => spawnSync(process.execPath,
 		["--input-type=module", "-e", script, root, ...(leaveLock ? ["leave-lock"] : [])],
 		{ encoding: "utf8", timeout: 10_000 });
-	const lock = await acquireProjectLock(root, "review");
+	const lock = await acquireProjectLock(root, "integration", "batch");
 	try {
 		const contender = run();
 		assert.equal(contender.status, 0, contender.stderr);
@@ -208,9 +209,9 @@ test("review locks exclude another Node process and recover after owner terminat
 	const terminated = run(true);
 	assert.equal(terminated.signal, "SIGKILL", terminated.stderr);
 	assert.equal(terminated.stdout, "acquired");
-	const lockPath = join(root, DATA_DIR, "review.lock");
+	const lockPath = join(root, DATA_DIR, `integration-${contentHash("batch")}.lock`);
 	const old = new Date(Date.now() - 60_000);
 	utimesSync(lockPath, old, old);
-	const recovered = await acquireProjectLock(root, "review");
+	const recovered = await acquireProjectLock(root, "integration", "batch");
 	await recovered.release();
 });

@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
 import { loadConfig, requireOptIn } from "./config.ts";
 import { atomicProjectWrite, contentHash, readProjectFile } from "./files.ts";
-import { acquireProjectLock } from "./lock.ts";
 import { PREFERENCES_PATH, readPreferences } from "./preferences.ts";
 import { runWorkerProcess, type ReviewInput, type ReviewResult, type Transport } from "./reviewer.ts";
 import { readProgress, STATE_PATH } from "./state.ts";
 import { listSuggestions, saveProposals, validateProposal, type Suggestion } from "./store.ts";
+
+class CalibrationPending extends Error { constructor() { super("A Calibration item is already awaiting approval."); } }
 
 export function ordinaryDecisions(root: string): Suggestion[] {
 	return [...listSuggestions(root, "applied"), ...listSuggestions(root, "rejected")]
@@ -30,16 +31,15 @@ function excerpt(text: string, size: number): string {
 	return text.length <= size ? text : `${text.slice(0, size)}\n[Remaining decision text omitted]`;
 }
 function decisionText(item: Suggestion): string {
-	return `Title: ${item.title}\nTarget: ${item.target}\nDecision: ${item.status === "applied" ? "accepted" : "rejected"}\nReason: ${item.reason ?? "Not supplied"}\nRationale: ${excerpt(item.rationale, 1000)}\nBefore:\n${excerpt(item.before, 2000)}\nProposed instruction:\n${excerpt(item.after, 7000)}`;
+	return `Title: ${item.title}\nTarget: ${item.target}\nDecision: ${item.status === "applied" ? item.integration ? "accepted (selected for a reviewed batch integration)" : "accepted" : "rejected"}\nReason: ${item.reason ?? "Not supplied"}\nRationale: ${excerpt(item.rationale, 1000)}\nBefore:\n${excerpt(item.before, 2000)}\nProposed instruction:\n${excerpt(item.after, 7000)}`;
 }
 
 export async function calibrate(input: ReviewInput, transport: Transport = runWorkerProcess): Promise<ReviewResult> {
+	// No long-running lock. The single-pending-calibration rule is enforced again in the storage-lock commit.
 	const config = requireOptIn(input.root);
-	const lease = await acquireProjectLock(input.root, "review");
-	try {
+	{
 		input.signal.throwIfAborted();
 		if (hasPendingCalibration(input.root)) return { suggestions: [], reviewed: 0, remaining: 0, message: "A Calibration item is already awaiting approval. Use /idle-learn review." };
-		const previousState = readProjectFile(input.root, STATE_PATH);
 		const progress = readProgress(input.root);
 		const seen = new Set(progress.calibration?.rejections ?? []);
 		const decisions = ordinaryDecisions(input.root);
@@ -67,7 +67,7 @@ export async function calibrate(input: ReviewInput, transport: Transport = runWo
 			root: input.root, provider: config.provider ?? input.provider, model: config.model ?? input.model, thinking: config.thinking ?? input.thinking,
 			purpose: "calibration", systemPrompt: readFileSync(new URL("./calibration-prompt.md", import.meta.url), "utf8"), evidence,
 		}, input.signal);
-		input.signal.throwIfAborted(); lease.assertHeld();
+		input.signal.throwIfAborted();
 		if (!output || typeof output !== "object" || !Array.isArray((output as Record<string, unknown>).suggestions)) throw new Error("Calibrator returned an invalid suggestion list.");
 		const values = (output as { suggestions: unknown[] }).suggestions;
 		if (values.length > 1) throw new Error("Calibration may propose at most one combined edit.");
@@ -83,16 +83,25 @@ export async function calibrate(input: ReviewInput, transport: Transport = runWo
 		});
 		const captured = new Map(decisions.filter((item) => selected.some((record) => record.id === item.id)).map((item) => [item.id, JSON.stringify(item)]));
 		const processed = selected.filter((record) => newIds.has(record.id)).map((record) => record.id);
-		const saved = await saveProposals(input.root, proposals, () => {
-			input.signal.throwIfAborted(); lease.assertHeld();
+		let saved: Suggestion[];
+		try {
+			saved = await saveProposals(input.root, proposals, () => {
+			input.signal.throwIfAborted();
 			if (JSON.stringify(requireOptIn(input.root)) !== JSON.stringify(config)) throw new Error("Configuration changed during calibration.");
+			if (proposals.length && hasPendingCalibration(input.root)) throw new CalibrationPending();
 			if (readPreferences(input.root) !== preferences) throw new Error("Reviewer preferences changed during calibration. Retry on the current file.");
 			const current = new Map(ordinaryDecisions(input.root).map((item) => [item.id, JSON.stringify(item)]));
 			if ([...captured].some(([id, text]) => current.get(id) !== text)) throw new Error("Source decisions changed during calibration.");
 		}, () => {
-			const next = { ...progress, calibration: { rejections: [...new Set([...(progress.calibration?.rejections ?? []), ...processed])] } };
+			const previousState = readProjectFile(input.root, STATE_PATH);
+			const latest = readProgress(input.root);
+			const next = { ...latest, calibration: { rejections: [...new Set([...(latest.calibration?.rejections ?? []), ...processed])] } };
 			atomicProjectWrite(input.root, STATE_PATH, `${JSON.stringify(next, null, 2)}\n`, previousState);
 		}, "calibration");
+		} catch (error) {
+			if (error instanceof CalibrationPending) return { suggestions: [], reviewed: 0, remaining: 0, message: "Another calibration finished first. A Calibration item is already awaiting approval. Use /idle-learn review." };
+			throw error;
+		}
 		return { suggestions: saved, reviewed: selected.length, remaining: 0, message: `${selected.length} decisions reviewed; ${saved.length ? "one Calibration item awaits approval in /idle-learn review" : "no reviewer preference changes suggested"}.` };
-	} finally { await lease.release(); }
+	}
 }

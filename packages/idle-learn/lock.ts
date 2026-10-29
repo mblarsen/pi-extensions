@@ -1,23 +1,31 @@
 import lockfile from "proper-lockfile";
 import { requireOptIn } from "./config.ts";
-import { DATA_DIR, ensureProjectDirectory, projectPath } from "./files.ts";
+import { contentHash, DATA_DIR, ensureProjectDirectory, projectPath } from "./files.ts";
 
 export interface ProjectLock {
 	assertHeld(): void;
 	release(): Promise<void>;
 }
 
-/** Heartbeats retain live locks. After termination, stale locks expire after 30 seconds. */
-export async function acquireProjectLock(root: string, kind: "review" | "storage"): Promise<ProjectLock> {
-	requireOptIn(root, kind === "storage");
+/**
+ * Storage locks are short and protect shared-state commits. Integration locks are scoped to one batch
+ * and only prevent duplicate runs of that batch. Suggestion generation holds no long-running lock.
+ * Heartbeats retain live locks. After termination, stale locks expire after 30 seconds.
+ */
+export async function acquireProjectLock(root: string, kind: "storage"): Promise<ProjectLock>;
+export async function acquireProjectLock(root: string, kind: "integration", task: string): Promise<ProjectLock>;
+export async function acquireProjectLock(root: string, kind: "storage" | "integration", task?: string): Promise<ProjectLock> {
+	requireOptIn(root, true);
+	if (kind === "integration" && !task) throw new Error("Integration locks require a task ID.");
 	ensureProjectDirectory(root, DATA_DIR);
-	const path = projectPath(root, `${DATA_DIR}/${kind}.lock`);
+	const name = kind === "integration" ? `integration-${contentHash(task!)}` : kind;
+	const path = projectPath(root, `${DATA_DIR}/${name}.lock`);
 	let compromised: Error | undefined;
 	let released = false;
 	const unlock = await lockfile.lock(path, {
 		lockfilePath: path,
 		realpath: false,
-		retries: 0,
+		retries: kind === "storage" ? { retries: 8, minTimeout: 10, maxTimeout: 100, factor: 2 } : 0,
 		stale: 30_000,
 		update: 10_000,
 		onCompromised: (error) => { compromised = error; },
@@ -35,11 +43,11 @@ export async function acquireProjectLock(root: string, kind: "review" | "storage
 	};
 }
 
-export async function withStorageLock<T>(root: string, action: (lease: ProjectLock) => T): Promise<T> {
+export async function withStorageLock<T>(root: string, action: (lease: ProjectLock) => T | Promise<T>): Promise<T> {
 	const lease = await acquireProjectLock(root, "storage");
 	try {
 		lease.assertHeld();
-		return action(lease);
+		return await action(lease);
 	} finally {
 		await lease.release();
 	}

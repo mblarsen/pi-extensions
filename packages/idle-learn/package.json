@@ -14,6 +14,8 @@
     "worker-launcher.mjs",
     "reviewer-prompt.md",
     "calibration-prompt.md",
+    "refresh-prompt.md",
+    "integration-prompt.md",
     "README.md",
     "LICENSE"
   ],
