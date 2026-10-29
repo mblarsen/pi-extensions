@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,7 +40,7 @@ export function effectivePrompt(root: string, config: Config): string {
 export function runWorkerProcess(request: WorkerRequest, signal: AbortSignal): Promise<unknown> {
 	return new Promise((resolvePromise, reject) => {
 		if (signal.aborted) { reject(new Error("Review cancelled.")); return; }
-		const child = spawn(process.execPath, [fileURLToPath(new URL("./worker-launcher.mjs", import.meta.url))], {
+		const child = spawn(process.execPath, [fileURLToPath(new URL("./worker-launcher.mjs", import.meta.url)), getPackageDir()], {
 			cwd: request.root, stdio: ["pipe", "pipe", "pipe"], env: process.env,
 		});
 		let output = "";

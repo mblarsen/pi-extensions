@@ -210,5 +210,7 @@ npm run check
 npx changeset status
 ```
 
-Tests cover SDK resource isolation, child workers with a local mock provider, concurrent session progress, batch integration and recovery, write-scope validation, stale-diff refresh, application races, and TUI recovery.
+Tests pack and install the actual npm tarball without SDK peer copies, then run all four worker modes against a local mock provider. Workers use SDK peers from the running Pi host.
+
+Tests also cover SDK resource isolation, child workers with a local mock provider, concurrent session progress, batch integration and recovery, write-scope validation, stale-diff refresh, application races, and TUI recovery.
 Manual terminal testing remains useful for provider-specific behavior and terminal themes.
