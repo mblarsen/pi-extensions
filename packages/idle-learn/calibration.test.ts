@@ -6,7 +6,6 @@ import { afterEach, test } from "node:test";
 import { calibrate, calibrationDue } from "./calibration.ts";
 import { CONFIG_PATH, initializeConfig, parseConfig, requireOptIn, saveConfig, serializeConfig } from "./config.ts";
 import { atomicProjectWrite, contentHash, readProjectFile } from "./files.ts";
-import { acquireProjectLock } from "./lock.ts";
 import { PREFERENCES_PATH, readPreferences } from "./preferences.ts";
 import { analyze, effectivePrompt, type ReviewInput } from "./reviewer.ts";
 import { readProgress, STATE_PATH } from "./state.ts";
@@ -218,11 +217,16 @@ test("stale and symlink preference targets cannot be applied", async () => {
 	}
 });
 
-test("calibration shares the project review lock with ordinary analysis", async () => {
+test("parallel calibrations hold no long lock and save at most one pending item", async () => {
 	const root = fixture(); await decision(root, 1);
-	const lock = await acquireProjectLock(root, "review");
-	try { await assert.rejects(calibrate(input(root), async () => { throw new Error("Must not call"); }), /lock/i); }
-	finally { await lock.release(); }
+	let started = 0; let release!: () => void;
+	const gate = new Promise<void>((done) => { release = done; });
+	const run = () => calibrate(input(root), async (request) => { if (++started === 2) release(); await gate; return response(request); });
+	const results = await Promise.all([run(), run()]);
+	assert.equal(started, 2);
+	assert.equal(results.flatMap((result) => result.suggestions).length, 1);
+	assert.match(results.map((result) => result.message).join("\n"), /already awaiting approval/);
+	assert.equal(listSuggestions(root).filter((item) => item.kind === "calibration").length, 1);
 });
 
 test("decision context is bounded and omitted rejections remain unprocessed", async () => {

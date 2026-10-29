@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, realpathSync, rmSync, watch } from "node:fs";
+import { mkdtempSync, readdirSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -7,9 +7,12 @@ import { test } from "node:test";
 import { discoverAndLoadExtensions, type ExtensionAPI, type ExtensionCommandContext, type RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import idleLearn from "./index.ts";
 import { CONFIG_PATH, initializeConfig, loadConfig, requireOptIn, saveConfig } from "./config.ts";
-import { readProjectFile } from "./files.ts";
+import { atomicProjectWrite, contentHash, readProjectFile } from "./files.ts";
+import { refreshSuggestion } from "./refresh.ts";
+import { integrateBatch } from "./integrate.ts";
+import { listBatches, readBatch } from "./batch.ts";
 import { PREFERENCES_PATH, readPreferences } from "./preferences.ts";
-import { decideSuggestion, saveProposals } from "./store.ts";
+import { decideSuggestion, listSuggestions, saveProposals } from "./store.ts";
 import type { ReviewInput, ReviewResult } from "./reviewer.ts";
 
 function directory() { return realpathSync(mkdtempSync(join(tmpdir(), "idle-learn-extension-"))); }
@@ -75,7 +78,7 @@ test("interactive init requires confirmation, review renders, and config can pau
 	}
 });
 
-async function backgroundFixture(setup?: (root: string) => Promise<void>) {
+async function backgroundFixture(setup?: (root: string) => Promise<void>, refresher?: typeof refreshSuggestion, integrator?: typeof integrateBatch) {
 	const root = directory();
 	initializeConfig(root);
 	if (setup) await setup(root);
@@ -88,6 +91,10 @@ async function backgroundFixture(setup?: (root: string) => Promise<void>) {
 	const selections: string[] = [];
 	const rendered: string[] = [];
 	const confirmations: string[] = [];
+	const confirmationEffects: Array<() => void> = [];
+	const comments: string[] = [];
+	const inputs: Array<string | undefined> = [];
+	const inputPrompts: string[] = [];
 	let finish!: (value: ReviewResult) => void;
 	let fail!: (error: Error) => void;
 	let customCalls = 0;
@@ -105,7 +112,7 @@ async function backgroundFixture(setup?: (root: string) => Promise<void>) {
 		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
 		registerCommand(_name: string, value: RegisteredCommand) { command = value; },
 		getThinkingLevel: () => "off",
-	} as unknown as ExtensionAPI, review, review);
+	} as unknown as ExtensionAPI, review, review, refresher, integrator);
 	const ctx = {
 		cwd: root, mode: "tui", hasUI: true, model: { provider: "test", id: "snapshot-model" }, isIdle: () => idle,
 		modelRegistry: { getAvailable: () => [] },
@@ -114,22 +121,29 @@ async function backgroundFixture(setup?: (root: string) => Promise<void>) {
 			setStatus(_key: string, value?: string) { statuses.push(value ?? ""); },
 			notify(message: string, type: string) { notifications.push({ message, type }); },
 			select: async (title: string, options: string[]) => { menus.push({ title, options }); return selections.shift(); },
-			input: async () => "Too feature-specific.",
-			confirm: async (title: string, body: string) => { confirmations.push(`${title}\n${body}`); return true; },
+			input: async (title: string) => { inputPrompts.push(title); return inputs.length ? inputs.shift() : title.startsWith("Analysis guidance") ? "" : "Too feature-specific."; },
+			editor: async () => comments.shift(),
+			confirm: async (title: string, body: string) => { confirmations.push(`${title}\n${body}`); confirmationEffects.shift()?.(); return true; },
 			custom: async (factory: any) => new Promise((resolve) => {
 				customCalls++;
 				const component = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_color: string, text: string) => text }, { matches: () => false }, resolve);
-				rendered.push(component.render(80).join("\n"));
+				const screen = component.render(80).join("\n");
+				rendered.push(screen);
+				if (screen.includes("Idle Learn / Refresh diff") || screen.includes("Idle Learn / Integrate")) {
+					if (selections[0] === "cancel-refresh") { selections.shift(); component.handleInput("\x1b"); }
+					return;
+				}
 				const action = selections.shift();
-				if (action === "apply" || action === "reject") { component.handleInput("\r"); component.handleInput(action === "apply" ? "p" : "r"); }
-				else component.handleInput(action === "analyze" ? "a" : "\x1b");
+				if (action?.startsWith("keys:")) { for (const key of action.slice(5)) component.handleInput(key === "E" ? "\x1b" : key); return; }
+				if (action === "apply" || action === "reject" || action === "refresh") { component.handleInput("\r"); component.handleInput(action === "apply" ? "p" : action === "refresh" ? "f" : "r"); }
+				else { component.handleInput(action === "analyze" ? "a" : "\x1b"); if (action !== "analyze") component.handleInput("\x1b"); }
 			}),
 		},
 	} as unknown as ExtensionCommandContext;
 	const emit = async (event: string) => { for (const handler of handlers.get(event) ?? []) await handler({}, ctx); };
 	await emit("session_start");
 	return {
-		ctx, reviews, notifications, statuses, selections, rendered, confirmations, menus, emit,
+		ctx, reviews, notifications, statuses, selections, rendered, confirmations, confirmationEffects, menus, emit, comments, inputs, inputPrompts,
 		command: (args: string) => command.handler(args, ctx),
 		get customCalls() { return customCalls; },
 		setIdle: (value: boolean) => { idle = value; },
@@ -166,6 +180,33 @@ test("configuration value rows still open model and thinking selectors", async (
 		assert.ok(run.menus.at(-1)!.options.includes("Thinking level: off (explicit)"));
 		assert.equal(requireOptIn(run.ctx.cwd).thinking, "off");
 	} finally { await run.close(); }
+});
+
+test("direct analyze guidance bypasses input and reaches the reviewer", async () => {
+	const run = await backgroundFixture();
+	try {
+		await run.command("analyze include the guidance we just discussed");
+		assert.equal(run.reviews[0].guidance, "include the guidance we just discussed");
+		assert.equal(run.inputPrompts.length, 0);
+		run.finish(); await settleBackground();
+	} finally { await run.close(); }
+});
+
+test("review a and menu Analyze now ask for optional guidance; Enter is normal and Escape cancels", async () => {
+	for (const source of ["review", "menu"]) for (const guidance of ["Include recent guidance", "", undefined]) {
+		const run = await backgroundFixture();
+		try {
+			run.inputs.push(guidance);
+			run.selections.push(source === "review" ? "analyze" : "Analyze now");
+			await run.command(source === "review" ? "review" : "");
+			assert.match(run.inputPrompts[0], /Analysis guidance.*optional/);
+			assert.equal(run.reviews.length, guidance === undefined ? 0 : 1);
+			if (guidance !== undefined) {
+				assert.equal(run.reviews[0].guidance, guidance || undefined);
+				run.finish(); await settleBackground();
+			}
+		} finally { await run.close(); }
+	}
 });
 
 test("manual analysis returns to chat, keeps its snapshot through chat events, and notifies without reopening UI", async () => {
@@ -399,4 +440,171 @@ test("session navigation and configuration still cancel manual reviews", async (
 			assert.equal(run.notifications.some((item) => item.type === "error"), false, event);
 		} finally { await run.close(); }
 	}
+});
+
+async function stalePending(root: string) {
+	atomicProjectWrite(root, PREFERENCES_PATH, "One. Two.\n", null);
+	await saveProposals(root, [{ kind: "calibration", title: "Improve preference", target: PREFERENCES_PATH, rationale: "Decision feedback", evidence: [{ session: "decision", entry: "e1", quote: "Use these terms." }],
+		baseHash: contentHash("One. Two.\n"), before: "Two", after: "Second" }], undefined, undefined, "calibration");
+	atomicProjectWrite(root, PREFERENCES_PATH, "First. Two.\n", "One. Two.\n");
+}
+
+test("stale calibration Apply refreshes the diff, keeps details visible, and needs a separate Apply", async () => {
+	let calls = 0;
+	const run = await backgroundFixture(stalePending, (input, item) => refreshSuggestion(input, item, async () => {
+		calls++; return { before: "Two", after: "Second" };
+	}));
+	try {
+		run.selections.push("apply", "close");
+		await run.command("review");
+		assert.equal(calls, 1);
+		assert.equal(readPreferences(run.ctx.cwd), "First. Two.\n");
+		assert.equal(listSuggestions(run.ctx.cwd).length, 1);
+		assert.match(run.rendered.at(-1)!, /Refreshed diff ready/);
+		assert.match(run.rendered.at(-1)!, /Proposed edit/);
+		assert.equal(run.confirmations.filter((item) => item.startsWith("Apply")).length, 0);
+		run.selections.push("apply", "close");
+		await run.command("review");
+		assert.equal(readPreferences(run.ctx.cwd), "First. Second.\n");
+		assert.equal(listSuggestions(run.ctx.cwd, "applied").length, 1);
+		assert.equal(calls, 1);
+	} finally { await run.close(); }
+});
+
+test("a failed refresh returns to the pending suggestion details with its error", async () => {
+	const run = await backgroundFixture(stalePending, async () => { throw new Error("Provider unavailable"); });
+	try {
+		run.selections.push("apply", "close");
+		await run.command("review");
+		assert.equal(listSuggestions(run.ctx.cwd).length, 1);
+		assert.match(run.rendered.at(-1)!, /Error: Provider unavailable/);
+		assert.match(run.rendered.at(-1)!, /Proposed edit/);
+		assert.equal(readPreferences(run.ctx.cwd), "First. Two.\n");
+	} finally { await run.close(); }
+});
+
+test("Escape cancels refresh without hiding or applying the pending suggestion", async () => {
+	const run = await backgroundFixture(stalePending, (input) => new Promise((_resolve, reject) => {
+		input.signal.addEventListener("abort", () => reject(new Error("Cancelled")), { once: true });
+	}));
+	try {
+		run.selections.push("refresh", "cancel-refresh", "close");
+		await run.command("review");
+		assert.equal(listSuggestions(run.ctx.cwd).length, 1);
+		assert.match(run.rendered.at(-1)!, /Refresh cancelled/);
+		assert.match(run.rendered.at(-1)!, /Proposed edit/);
+	} finally { await run.close(); }
+});
+
+test("session navigation cancels an active diff refresh", async () => {
+	let started!: () => void;
+	const ready = new Promise<void>((resolve) => { started = resolve; });
+	const run = await backgroundFixture(stalePending, (input) => new Promise((_resolve, reject) => {
+		input.signal.addEventListener("abort", () => reject(input.signal.reason), { once: true });
+		started();
+	}));
+	try {
+		run.selections.push("refresh", "close");
+		const review = run.command("review");
+		await ready;
+		await run.emit("session_before_switch");
+		await review;
+		assert.equal(listSuggestions(run.ctx.cwd).length, 1);
+		assert.match(run.rendered.at(-1)!, /session switch/);
+	} finally { await run.close(); }
+});
+
+const AGENTS = "# Project\n\nRun npm test.\n";
+async function twoLessons(root: string) {
+	writeFileSync(join(root, "AGENTS.md"), AGENTS);
+	for (const index of [1, 2]) await saveProposals(root, [{ title: `Lesson ${index}`, target: "AGENTS.md", rationale: "Role feedback", evidence: [{ session: "s", entry: `e${index}`, quote: `Quote ${index}` }],
+		baseHash: contentHash(AGENTS), before: "Run npm test.", after: `Run npm test.\nLesson ${index}.` }]);
+}
+const integrationOutput = (text: string) => async () => ({ summary: "Combined lessons.", notes: [{ number: 1, note: "Added." }, { number: 2, note: "Merged." }],
+	files: [{ path: "AGENTS.md", edits: [{ before: "Run npm test.", after: `Run npm test.\n${text}` }] }] });
+
+test("instruction suggestions have no direct Apply; select, comment, integrate, regenerate, then Apply separately", async () => {
+	const requests: string[] = [];
+	const run = await backgroundFixture(twoLessons, undefined, (input, id) => integrateBatch(input, id, async (request) => {
+		requests.push(request.evidence);
+		return integrationOutput(requests.length === 1 ? "Lessons 1 and 2." : "- Lesson 1\n- Lesson 2")();
+	}));
+	try {
+		run.selections.push("keys:\rpfEE");
+		await run.command("review");
+		assert.equal(run.confirmations.length, 0);
+		assert.equal(listSuggestions(run.ctx.cwd).length, 2);
+		assert.doesNotMatch(run.rendered.join("\n"), /p apply/);
+		run.comments.push("Merge #1 and #2.", "Use bullets.");
+		run.selections.push("keys: j i", "keys:c", "keys:g", "keys:c", "keys:g", "keys:E", "close");
+		await run.command("review");
+		assert.equal(requests.length, 2);
+		assert.deepEqual(JSON.parse(requests[1]).comments, ["Merge #1 and #2.", "Use bullets."]);
+		assert.match(JSON.parse(requests[1]).previousDraft.files[0].content, /Lessons 1 and 2/);
+		assert.equal(readProjectFile(run.ctx.cwd, "AGENTS.md"), AGENTS);
+		assert.equal(listSuggestions(run.ctx.cwd).length, 2);
+		assert.match(run.rendered.join("\n"), /Selected proposals/);
+		assert.match(run.rendered.join("\n"), /\+- Lesson 2/);
+		assert.match(run.rendered.join("\n"), /Batch saved|Draft ready/);
+		run.selections.push("keys:b", "keys:p", "close");
+		await run.command("review");
+		assert.match(run.confirmations.at(-1)!, /Apply this integration draft\?[\s\S]*AGENTS\.md[\s\S]*2 selected proposals/);
+		assert.equal(readProjectFile(run.ctx.cwd, "AGENTS.md"), "# Project\n\nRun npm test.\n- Lesson 1\n- Lesson 2\n");
+		assert.deepEqual(listSuggestions(run.ctx.cwd), []);
+		assert.equal(listSuggestions(run.ctx.cwd, "applied").length, 2);
+		assert.match(run.rendered.at(-1)!, /2 proposals recorded as accepted/);
+	} finally { await run.close(); }
+});
+
+test("a target change after integration disables Apply until regeneration", async () => {
+	const run = await backgroundFixture(twoLessons, undefined, (input, id) => integrateBatch(input, id, integrationOutput("Combined.")));
+	try {
+		run.selections.push("keys: j i", "keys:g", "keys:E", "close");
+		await run.command("review");
+		writeFileSync(join(run.ctx.cwd, "AGENTS.md"), `${AGENTS}User edit.\n`);
+		run.selections.push("keys:b", "keys:pE", "close");
+		await run.command("review");
+		const batchScreen = run.rendered.findLast((screen) => screen.includes("Integration batch"))!;
+		assert.match(batchScreen, /AGENTS\.md changed since this draft/);
+		assert.doesNotMatch(batchScreen, /p apply/);
+		assert.equal(run.confirmations.filter((item) => item.startsWith("Apply")).length, 0);
+		assert.equal(readProjectFile(run.ctx.cwd, "AGENTS.md"), `${AGENTS}User edit.\n`);
+		assert.equal(listSuggestions(run.ctx.cwd).length, 2);
+	} finally { await run.close(); }
+});
+
+test("Escape, session navigation, and configuration cancel integration and keep the batch", async () => {
+	for (const how of ["escape", "session_before_tree", "session_shutdown", "cancel"]) {
+		let started!: () => void;
+		const ready = new Promise<void>((resolve) => { started = resolve; });
+		const run = await backgroundFixture(twoLessons, undefined, (input) => new Promise((_resolve, reject) => {
+			input.signal.addEventListener("abort", () => reject(input.signal.reason ?? new Error("Cancelled")), { once: true });
+			started();
+		}));
+		try {
+			run.selections.push("keys: i", "keys:g", ...(how === "escape" ? ["cancel-refresh"] : []), "keys:E", "close");
+			const review = run.command("review");
+			await ready;
+			if (how === "cancel") await run.command("cancel");
+			else if (how !== "escape") await run.emit(how);
+			await review;
+			assert.equal(readProjectFile(run.ctx.cwd, "AGENTS.md"), AGENTS, how);
+			assert.equal(listSuggestions(run.ctx.cwd).length, 2, how);
+			const [batch] = listBatches(run.ctx.cwd);
+			assert.equal(batch?.status, "open", how);
+			assert.equal(readBatch(run.ctx.cwd, batch.id).sources.length, 1, how);
+			if (how === "escape") assert.match(run.rendered.join("\n"), /Integration cancelled/);
+		} finally { await run.close(); }
+	}
+});
+
+test("Reject keeps its reason and still counts toward calibration", async () => {
+	const run = await backgroundFixture(twoLessons);
+	try {
+		run.selections.push("reject", "close");
+		await run.command("review");
+		const [rejected] = listSuggestions(run.ctx.cwd, "rejected");
+		assert.equal(rejected.reason, "Too feature-specific.");
+		assert.equal(listSuggestions(run.ctx.cwd).length, 1);
+	} finally { await run.close(); }
 });

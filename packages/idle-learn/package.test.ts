@@ -9,3 +9,10 @@ test("host-provided packages use wildcard peers, not runtime dependencies", () =
 		assert.equal(manifest.peerDependencies?.[name], "*", `${name} must use a wildcard peer range`);
 	}
 });
+
+test("package files include the integration prompt and batch modules but exclude tests", () => {
+	const manifest = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+	assert.ok(manifest.files.includes("integration-prompt.md"));
+	assert.ok(manifest.files.includes("*.ts"));
+	assert.ok(manifest.files.includes("!*.test.ts"));
+});

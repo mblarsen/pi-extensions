@@ -24,6 +24,8 @@ export interface Suggestion {
 	after: string;
 	status: "pending" | "applied" | "rejected";
 	reason?: string;
+	/** Set when a reviewed batch integration applied this proposal. */
+	integration?: { batch: string; draft: string };
 }
 export type Proposal = Pick<Suggestion, "title" | "target" | "rationale" | "evidence" | "baseHash" | "before" | "after" | "kind">;
 export type ArtifactFolder = "suggestions" | "applied" | "rejected";
@@ -108,7 +110,46 @@ export function parseSuggestion(content: string): Suggestion {
 	return {
 		...proposal, id: input.id, created: input.created, resultHash: input.resultHash, status: input.status,
 		...(input.reason === undefined ? {} : { reason: text(input.reason, "rejection reason", 4000) }),
+		...(input.integration === undefined ? {} : { integration: integrationLink(input.integration, input.status) }),
 	};
+}
+
+function integrationLink(value: unknown, status: unknown): { batch: string; draft: string } {
+	const link = value as Record<string, unknown> | null;
+	if (status !== "applied" || !link || typeof link !== "object" || typeof link.batch !== "string" || !idPattern.test(link.batch)
+		|| typeof link.draft !== "string" || !hashPattern.test(link.draft)) throw new Error("Invalid suggestion integration link.");
+	return { batch: link.batch, draft: link.draft };
+}
+
+/** Stable identity of a displayed pending artifact, used to detect concurrent edits. */
+export function suggestionSnapshot(suggestion: Suggestion): string {
+	return contentHash(serializeSuggestion(suggestion));
+}
+
+/** Archive a pending artifact after its decision is final. Repeating an interrupted archive is safe. */
+export function archiveSuggestion(root: string, current: Suggestion, result: Suggestion, original: string): void {
+	const source = artifactPath("suggestions", current.id);
+	const destination = artifactPath(result.status === "applied" ? "applied" : "rejected", current.id);
+	const archived = serializeSuggestion(result);
+	const existingArchive = readProjectFile(root, destination);
+	if (existingArchive !== null && existingArchive !== archived) throw new Error("Conflicting suggestion archive. Inspect the saved artifacts.");
+	if (existingArchive === null) atomicProjectWrite(root, destination, archived, null);
+	if (readProjectFile(root, source) !== original) throw new Error("Pending artifact changed during the decision. Inspect the saved artifacts.");
+	unlinkSync(projectPath(root, source));
+}
+
+/** Read one pending artifact with its raw text. Returns undefined when it is no longer pending. */
+export function readPending(root: string, id: string): { suggestion: Suggestion; original: string } | undefined {
+	const original = readProjectFile(root, artifactPath("suggestions", id));
+	if (original === null) return undefined;
+	const suggestion = parseSuggestion(original);
+	if (suggestion.id !== id || suggestion.status !== "pending") throw new Error("Suggestion ID or status does not match its folder.");
+	return { suggestion, original };
+}
+
+export function readArchived(root: string, folder: "applied" | "rejected", id: string): Suggestion | undefined {
+	const content = readProjectFile(root, artifactPath(folder, id));
+	return content === null ? undefined : parseSuggestion(content);
 }
 
 export function listSuggestions(root: string, folder: ArtifactFolder = "suggestions"): Suggestion[] {
@@ -133,31 +174,52 @@ function duplicateKey(proposal: Proposal): string {
 	return contentHash(`${proposal.target}\n${proposal.after.replace(/\s+/g, " ").trim().toLowerCase()}`);
 }
 
-export async function saveProposals(root: string, values: unknown[], guard: () => void = () => {}, commitState: () => void = () => {}, kind: SuggestionKind = "instruction"): Promise<Suggestion[]> {
+export async function saveProposals(root: string, values: unknown[], guard: () => void = () => {}, commitState: () => void = () => {}, kind: SuggestionKind = "instruction", skipDuplicates = false): Promise<Suggestion[]> {
 	if (!Array.isArray(values) || values.length > 3) throw new Error("A review may contain at most three suggestions.");
 	requireOptIn(root);
 	return withStorageLock(root, () => {
 		requireOptIn(root);
+		guard();
 		const known = ["suggestions", "rejected", "applied"].flatMap((folder) => listSuggestions(root, folder as ArtifactFolder));
 		const keys = new Set(known.map(duplicateKey));
-		const suggestions = values.map((value) => {
+		const suggestions = values.flatMap((value) => {
 			const proposal = validateProposal(value, kind);
 			suggestionTargetPath(root, proposal);
+			const key = duplicateKey(proposal);
+			if (keys.has(key)) {
+				if (skipDuplicates) return [];
+				throw new Error("Duplicate of a saved, applied, or rejected suggestion.");
+			}
 			const current = readProjectFile(root, proposal.target);
 			const result = applyEdit(current, proposal);
 			if (Buffer.byteLength(result) > (kind === "calibration" ? PREFERENCES_BYTES : MAX_FILE_BYTES)) throw new Error("Proposed target exceeds the size limit.");
-			const key = duplicateKey(proposal);
-			if (keys.has(key)) throw new Error("Duplicate of a saved, applied, or rejected suggestion.");
 			keys.add(key);
 			const suggestion: Suggestion = { ...proposal, id: randomUUID(), created: new Date().toISOString(), resultHash: contentHash(result), status: "pending" };
 			const content = serializeSuggestion(suggestion);
 			if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error("Suggestion artifact exceeds the size limit.");
-			return suggestion;
+			return [suggestion];
 		});
-		guard();
 		for (const suggestion of suggestions) atomicProjectWrite(root, artifactPath("suggestions", suggestion.id), serializeSuggestion(suggestion), null);
 		commitState();
 		return suggestions;
+	});
+}
+
+export async function replacePendingEdit(root: string, displayed: Suggestion, edit: { baseHash: string | null; before: unknown; after: unknown }, guard: () => void = () => {}): Promise<Suggestion> {
+	return withStorageLock(root, () => {
+		guard();
+		const source = artifactPath("suggestions", displayed.id);
+		const original = readProjectFile(root, source);
+		if (original === null || JSON.stringify(parseSuggestion(original)) !== JSON.stringify(displayed) || displayed.status !== "pending") {
+			throw new Error("Suggestion changed. Review it again before refreshing.");
+		}
+		const proposal = validateProposal({ ...displayed, ...edit }, displayed.kind ?? "instruction");
+		suggestionTargetPath(root, proposal);
+		const result = applyEdit(readProjectFile(root, proposal.target), proposal);
+		if (Buffer.byteLength(result) > (proposal.kind === "calibration" ? PREFERENCES_BYTES : MAX_FILE_BYTES)) throw new Error("Proposed target exceeds the size limit.");
+		const refreshed: Suggestion = { ...displayed, ...proposal, resultHash: contentHash(result) };
+		atomicProjectWrite(root, source, serializeSuggestion(refreshed), original);
+		return refreshed;
 	});
 }
 
@@ -173,11 +235,9 @@ export async function decideSuggestion(root: string, displayed: Suggestion, deci
 		suggestionTargetPath(root, current);
 		const rejectionReason = reason === undefined || !reason.trim() ? undefined : text(reason.trim(), "rejection reason", 4000);
 		const result: Suggestion = { ...current, status: decision === "apply" ? "applied" : "rejected", ...(decision === "reject" && rejectionReason ? { reason: rejectionReason } : {}) };
-		const folder = decision === "apply" ? "applied" : "rejected";
-		const destination = artifactPath(folder, current.id);
-		const archived = serializeSuggestion(result);
+		const destination = artifactPath(decision === "apply" ? "applied" : "rejected", current.id);
 		const existingArchive = readProjectFile(root, destination);
-		if (existingArchive !== null && existingArchive !== archived) throw new Error("Conflicting suggestion archive. Inspect the saved artifacts.");
+		if (existingArchive !== null && existingArchive !== serializeSuggestion(result)) throw new Error("Conflicting suggestion archive. Inspect the saved artifacts.");
 		if (decision === "apply") {
 			const content = readProjectFile(root, current.target);
 			// Recover an interrupted archive step without applying the edit twice.
@@ -188,9 +248,7 @@ export async function decideSuggestion(root: string, displayed: Suggestion, deci
 				atomicProjectWrite(root, current.target, updated, content);
 			}
 		}
-		if (existingArchive === null) atomicProjectWrite(root, destination, archived, null);
-		if (readProjectFile(root, source) !== original) throw new Error("Pending artifact changed during the decision. Inspect the saved artifacts.");
-		unlinkSync(projectPath(root, source));
+		archiveSuggestion(root, current, result, original);
 		return result;
 	});
 }

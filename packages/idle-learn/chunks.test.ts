@@ -3,11 +3,23 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { selectChunk, CHUNK_BYTES } from "./chunks.ts";
+import { selectChunk, selectRecentChunk, CHUNK_BYTES } from "./chunks.ts";
 import { initializeConfig } from "./config.ts";
 import { IdleReviewer } from "./lifecycle.ts";
 import { analyze, type ReviewInput } from "./reviewer.ts";
 import { readProgress } from "./state.ts";
+
+test("recent evidence is a bounded chronological suffix, not the oldest backlog", () => {
+	const entries = Array.from({ length: 10 }, (_, index) => ({ id: String(index), text: `[user]\n${"x".repeat(10000)}` }));
+	const chunk = selectRecentChunk(entries);
+	assert.deepEqual(chunk.entries.map((entry) => entry.id), ["6", "7", "8", "9"]);
+	assert.equal(chunk.remaining, 0);
+	assert.deepEqual(chunk.overlap, []);
+	assert.ok(chunk.entries.reduce((size, entry) => size + Buffer.byteLength(JSON.stringify(entry)), 0) <= CHUNK_BYTES);
+	assert.deepEqual(selectRecentChunk([]).entries, []);
+	assert.throws(() => selectRecentChunk([{ id: "large", text: "x".repeat(CHUNK_BYTES + 1) }]), /exceeds/);
+	assert.match(selectRecentChunk([{ id: "tool", text: `[toolResult]\n${"x".repeat(CHUNK_BYTES * 2)}` }]).entries[0].text, /omitted/);
+});
 
 const empty = { suggestions: [], observations: [] };
 function fixture(entries: ReviewInput["entries"]): ReviewInput {

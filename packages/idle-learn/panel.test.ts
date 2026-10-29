@@ -20,22 +20,67 @@ test("review renders within bounds at 80x24, 120x40, and 200x60", () => {
 		const lines = panel.render(width);
 		assert.ok(lines.length <= height);
 		assert.ok(lines.every((line) => visibleWidth(line) <= width));
-		assert.match(lines.join("\n"), /p apply/);
+		assert.match(lines.join("\n"), /i integrate/);
+		assert.doesNotMatch(lines.join("\n"), /p apply/);
 		assert.match(lines.join("\n"), /r reject/);
 		assert.match(lines.join("\n"), /Esc/);
 		assert.match(lines.join("\n"), /scroll/);
 	}
 });
 
-test("narrow review requires opening details before apply and Escape unwinds safely", () => {
+test("narrow review requires opening details before reject; calibration alone keeps apply", () => {
 	const actions: ReviewAction[] = [];
 	const panel = new ReviewPanel([suggestion], "Ready", theme, () => 24, (action) => actions.push(action));
 	panel.render(80);
-	panel.handleInput("p"); assert.equal(actions.length, 0);
+	panel.handleInput("r"); assert.equal(actions.length, 0);
 	panel.handleInput("\r"); panel.render(80);
-	panel.handleInput("p"); assert.equal(actions[0].kind, "apply");
+	panel.handleInput("p"); panel.handleInput("f"); assert.equal(actions.length, 0);
+	panel.handleInput("r"); assert.equal(actions[0].kind, "reject");
 	panel.handleInput("\x1b"); assert.equal(actions.length, 1);
 	panel.handleInput("\x1b"); assert.equal(actions[1].kind, "close");
+	const calibration: ReviewAction[] = [];
+	const other = new ReviewPanel([{ ...suggestion, kind: "calibration" }], "Ready", theme, () => 24, (action) => calibration.push(action));
+	other.render(80); other.handleInput("\r"); other.render(80);
+	assert.match(other.render(80).join("\n"), /p apply/);
+	other.handleInput("p"); other.handleInput(" "); other.handleInput("i");
+	assert.deepEqual(calibration.map((action) => action.kind), ["apply"]);
+});
+
+test("Space builds a persistent multi-selection and i opens it as a batch", () => {
+	const actions: ReviewAction[] = [];
+	const second = { ...suggestion, id: "22222222-2222-4222-8222-222222222222", title: "Second lesson" };
+	const calibration = { ...suggestion, id: "33333333-3333-4333-8333-333333333333", kind: "calibration" as const, title: "Calibration item" };
+	const selection = new Set<string>();
+	const panel = new ReviewPanel([suggestion, second, calibration], "Ready", theme, () => 30, (action) => actions.push(action), undefined, undefined, false, { selection });
+	panel.handleInput(" "); panel.handleInput("j"); panel.handleInput(" "); panel.handleInput("j"); panel.handleInput(" ");
+	const screen = panel.render(80).join("\n");
+	assert.match(screen, /● Use the project/);
+	assert.match(screen, /● Second lesson/);
+	assert.match(screen, /2 selected/);
+	assert.deepEqual([...selection], [suggestion.id, second.id]);
+	panel.handleInput("i");
+	assert.equal(actions[0].kind, "integrate");
+	assert.deepEqual((actions[0] as any).suggestions.map((item: any) => item.id), [suggestion.id, second.id]);
+	const restored = new ReviewPanel([suggestion, second], "Ready", theme, () => 30, () => {}, undefined, undefined, false, { selection });
+	assert.match(restored.render(80).join("\n"), /● Second lesson/);
+	assert.match(new ReviewPanel([suggestion], "Ready", theme, () => 30, () => {}).render(80).join("\n"), /○ Use the project/);
+	const single: ReviewAction[] = [];
+	new ReviewPanel([suggestion], "Ready", theme, () => 30, (action) => single.push(action)).handleInput("i");
+	assert.deepEqual((single[0] as any).suggestions, [suggestion]);
+});
+
+test("saved and partially applied batches are announced and reachable with b", () => {
+	const actions: ReviewAction[] = [];
+	const panel = new ReviewPanel([suggestion], "Ready", theme, () => 30, (action) => actions.push(action), undefined, undefined, false, { batches: { open: 1, applying: 1 } });
+	const screen = panel.render(120).join("\n");
+	assert.match(screen, /partially applied\. Press b to resume/);
+	assert.match(screen, /b batches/);
+	panel.handleInput("b");
+	assert.deepEqual(actions, [{ kind: "batches" }]);
+	const empty: ReviewAction[] = [];
+	const none = new ReviewPanel([], "Ready", theme, () => 30, (action) => empty.push(action), undefined, undefined, false, { batches: { open: 1, applying: 0 } });
+	assert.match(none.render(80).join("\n"), /1 saved integration batch/);
+	none.handleInput("b"); assert.deepEqual(empty, [{ kind: "batches" }]);
 });
 
 test("populated review screens never offer or trigger session analysis", () => {
@@ -64,7 +109,7 @@ test("details scroll and adapt on resize without hiding actions", () => {
 	const resized = panel.render(80);
 	assert.ok(resized.length <= 24);
 	assert.ok(resized.every((line) => visibleWidth(line) <= 80));
-	assert.match(resized.join("\n"), /p apply/);
+	assert.match(resized.join("\n"), /r reject/);
 	assert.doesNotMatch(resized.join("\n"), /Tab focus/);
 });
 
@@ -125,4 +170,17 @@ test("empty, error, small-terminal, and monochrome states stay usable", () => {
 	const previous = process.env.NO_COLOR; process.env.NO_COLOR = "1";
 	try { assert.doesNotMatch(panel.render(80).join("\n"), /\x1b/); }
 	finally { if (previous === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = previous; }
+});
+
+
+test("retrying preserves the selected suggestion and opens its details", () => {
+	const actions: ReviewAction[] = [];
+	const other = { ...suggestion, id: "22222222-2222-4222-8222-222222222222", title: "Second pending suggestion", kind: "calibration" as const };
+	const panel = new ReviewPanel([suggestion, other], "Error: target changed. Refresh the diff.", theme, () => 24, (action) => actions.push(action), undefined, other.id, true);
+	const screen = panel.render(80).join("\n");
+	assert.match(screen, /Second pending suggestion/);
+	assert.match(screen, /Proposed edit/);
+	assert.match(screen, /f refresh diff/);
+	panel.handleInput("f");
+	assert.deepEqual(actions, [{ kind: "refresh", suggestion: other }]);
 });

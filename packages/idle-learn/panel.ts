@@ -4,7 +4,15 @@ import { HStack, SelectList, matchesKey, truncateToWidth, wrapTextWithAnsi, type
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { suggestionDiff, type Suggestion } from "./store.ts";
 
-export type ReviewAction = { kind: "close" | "analyze" } | { kind: "apply" | "reject"; suggestion: Suggestion };
+export type ReviewAction = { kind: "close" | "analyze" | "batches" }
+	| { kind: "apply" | "reject" | "refresh"; suggestion: Suggestion }
+	| { kind: "integrate"; suggestions: Suggestion[]; current: Suggestion };
+export interface ReviewOptions {
+	/** Instruction suggestion IDs selected for integration; retained across screens by the caller. */
+	selection?: Set<string>;
+	/** Open batches, and batches with an interrupted Apply. */
+	batches?: { open: number; applying: number };
+}
 export function safeText(value: string): string { return value.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ""); }
 const inline = (value: string) => safeText(value).replace(/\s+/g, " ").trim();
 
@@ -21,24 +29,45 @@ export class ReviewPanel implements Component {
 	private height: () => number;
 	private done: (action: ReviewAction) => void;
 	private keys?: (data: string, action: "confirm" | "cancel") => boolean;
-	private list: SelectList;
+	private list!: SelectList;
+	private selection: Set<string>;
+	private batches: { open: number; applying: number };
 
 	constructor(suggestions: Suggestion[], status: string, theme: Pick<Theme, "fg">, height: () => number,
-		done: (action: ReviewAction) => void, keys?: (data: string, action: "confirm" | "cancel") => boolean) {
+		done: (action: ReviewAction) => void, keys?: (data: string, action: "confirm" | "cancel") => boolean, selectedId?: string, detail = false, options: ReviewOptions = {}) {
 		this.suggestions = suggestions; this.status = status; this.theme = theme; this.height = height; this.done = done; this.keys = keys;
-		this.list = new SelectList(suggestions.map((item) => ({ value: item.id, label: `${item.kind === "calibration" ? "[Calibration] " : ""}${inline(item.title)}` })), 8, {
+		this.selected = Math.max(0, suggestions.findIndex((item) => item.id === selectedId));
+		this.detail = detail;
+		this.selection = options.selection ?? new Set();
+		for (const id of [...this.selection]) if (!suggestions.some((item) => item.id === id && item.kind !== "calibration")) this.selection.delete(id);
+		this.batches = options.batches ?? { open: 0, applying: 0 };
+		this.buildList();
+	}
+	private buildList(): void {
+		this.list = new SelectList(this.suggestions.map((item) => ({ value: item.id, label: `${item.kind === "calibration" ? "[Calibration] " : this.selection.has(item.id) ? "● " : "○ "}${inline(item.title)}` })), 8, {
 			selectedPrefix: (text) => this.color("accent", text), selectedText: (text) => this.color("accent", text),
 			description: (text) => this.color("muted", text), scrollInfo: (text) => this.color("dim", text), noMatch: (text) => text,
 		});
+		this.list.setSelectedIndex(this.selected);
 	}
+	private get current(): Suggestion | undefined { return this.suggestions[this.selected]; }
+	private get calibration(): boolean { return this.current?.kind === "calibration"; }
 	invalidate(): void { this.list.invalidate(); }
 	private color(token: ThemeColor, text: string): string { return process.env.NO_COLOR !== undefined ? text : this.theme.fg(token, text); }
 	handleInput(data: string): void {
 		if (this.keys?.(data, "cancel") || matchesKey(data, "escape") || data === "q") {
 			if (this.detail) { this.detail = false; this.scroll = 0; } else this.done({ kind: "close" });
 		} else if (data === "a" && !this.suggestions.length) this.done({ kind: "analyze" });
-		else if (data === "p" && this.suggestions[this.selected] && (this.detail || this.wide)) this.done({ kind: "apply", suggestion: this.suggestions[this.selected] });
-		else if (data === "r" && this.suggestions[this.selected] && (this.detail || this.wide)) this.done({ kind: "reject", suggestion: this.suggestions[this.selected] });
+		else if (data === "b" && (this.batches.open || this.batches.applying)) this.done({ kind: "batches" });
+		else if (data === " " && this.current && !this.calibration) {
+			if (this.selection.has(this.current.id)) this.selection.delete(this.current.id); else this.selection.add(this.current.id);
+			this.buildList();
+		} else if (data === "i" && this.current && (this.selection.size || !this.calibration)) {
+			const chosen = this.suggestions.filter((item) => this.selection.has(item.id));
+			this.done({ kind: "integrate", suggestions: chosen.length ? chosen : [this.current], current: this.current });
+		} else if (data === "p" && this.current && this.calibration && (this.detail || this.wide)) this.done({ kind: "apply", suggestion: this.current });
+		else if (data === "r" && this.current && (this.detail || this.wide)) this.done({ kind: "reject", suggestion: this.current });
+		else if (data === "f" && this.current && this.calibration && (this.detail || this.wide)) this.done({ kind: "refresh", suggestion: this.current });
 		else if ((matchesKey(data, "enter") || this.keys?.(data, "confirm")) && this.suggestions.length) this.detail = true;
 		else if ((matchesKey(data, "tab") || matchesKey(data, "shift+tab")) && this.wide) this.detail = !this.detail;
 		else if (this.detail) {
@@ -51,6 +80,10 @@ export class ReviewPanel implements Component {
 			const index = this.suggestions.findIndex((item) => item.id === this.list.getSelectedItem()?.value);
 			if (index >= 0 && index !== this.selected) { this.selected = index; this.scroll = 0; }
 		}
+	}
+	private batchLine(): string {
+		const { open, applying } = this.batches;
+		return applying ? `${applying} batch${applying === 1 ? " was" : "es were"} partially applied. Press b to resume.` : `${open} saved integration batch${open === 1 ? "" : "es"}. Press b to open.`;
 	}
 	private frame(title: string, lines: string[], width: number, rows?: number): string[] {
 		const inner = Math.max(1, width - 4);
@@ -97,7 +130,8 @@ export class ReviewPanel implements Component {
 			if (this.status && this.status !== "Ready") {
 				lines.push(...wrapTextWithAnsi(safeText(this.status), emptyWidth - 4).slice(0, 3).map((line) => this.color(this.status.startsWith("Error:") ? "error" : "muted", line)), "");
 			}
-			lines.push(this.color("accent", "a analyze now") + this.color("dim", "     Esc close"), "");
+			if (this.batches.applying || this.batches.open) lines.push(this.color(this.batches.applying ? "warning" : "muted", this.batchLine()), "");
+			lines.push(this.color("accent", "a analyze now") + this.color("dim", `${this.batches.open || this.batches.applying ? "     b batches" : ""}     Esc close`), "");
 			return this.frame(this.color("accent", "Idle Learn / Review"), lines.slice(0, this.height() - 2), emptyWidth);
 		}
 		const rows = Math.max(3, Math.min(28, this.height() - 9));
@@ -118,11 +152,15 @@ export class ReviewPanel implements Component {
 				{ component: { render: detail, invalidate() {} }, grow: 1 },
 			], { gap: 1 }).render(width);
 		} else body = this.detail ? detail(width) : listing(width);
-		const actions = this.wide ? "p apply   r reject   Tab focus   Esc back/close"
-			: this.detail ? "p apply   r reject   Esc back" : "Up/Down select   Enter details   Esc close";
+		const batches = this.batches.open || this.batches.applying ? "   b batches" : "";
+		const integrate = `i integrate${this.selection.size ? ` ${this.selection.size} selected` : ""}`;
+		const item = this.calibration ? "p apply   f refresh diff   r reject" : `Space select   ${integrate}   r reject`;
+		const actions = this.wide ? `${item}${batches}   Tab focus   Esc back/close`
+			: this.detail ? `${item}   Esc back` : `Up/Down move   ${this.calibration ? "Enter details" : `Space select   ${integrate}`}${batches}   Esc close`;
 		return [
-			this.color("accent", "Idle Learn") + this.color("muted", ` / Review    ${this.suggestions.length} pending`),
-			this.color(this.status.startsWith("Error:") ? "error" : "muted", inline(this.status)), "",
+			this.color("accent", "Idle Learn") + this.color("muted", ` / Review    ${this.suggestions.length} pending${this.selection.size ? `, ${this.selection.size} selected` : ""}`),
+			this.batches.applying || this.batches.open ? this.color(this.batches.applying ? "warning" : "muted", this.batchLine()) : this.color(this.status.startsWith("Error:") ? "error" : "muted", inline(this.status)),
+			...(this.batches.applying || this.batches.open ? [this.color(this.status.startsWith("Error:") ? "error" : "muted", inline(this.status))] : [""]),
 			...body,
 			this.color("dim", actions),
 			...(this.detail || this.wide ? [this.color("dim", `Up/Down/PgUp/PgDn scroll ${this.scroll + 1}/${this.maxScroll + 1}${this.wide ? `  ·  Focus: ${this.detail ? "details" : "suggestions"}` : ""}`)] : []),

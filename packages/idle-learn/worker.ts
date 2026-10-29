@@ -13,15 +13,15 @@ export interface WorkerRequest {
 	thinking: string;
 	systemPrompt: string;
 	evidence: string;
-	purpose?: "calibration";
+	purpose?: "calibration" | "refresh" | "integrate";
 }
 
 export async function runWorker(input: WorkerRequest): Promise<unknown> {
 	validateConfig({ enabled: true, provider: input.provider, model: input.model, thinking: input.thinking });
 	if (typeof input.systemPrompt !== "string" || !input.systemPrompt.trim() || Buffer.byteLength(input.systemPrompt) > 64 * 1024) throw new Error("Invalid reviewer system prompt.");
 	if (typeof input.evidence !== "string" || Buffer.byteLength(input.evidence) > 384 * 1024) throw new Error("Reviewer evidence exceeds the input limit.");
-	if (input.purpose !== undefined && input.purpose !== "calibration") throw new Error("Invalid worker purpose.");
-	const paths = input.purpose === "calibration" ? [] : evidencePaths(input.root);
+	if (input.purpose !== undefined && !["calibration", "refresh", "integrate"].includes(input.purpose)) throw new Error("Invalid worker purpose.");
+	const paths = input.purpose ? [] : evidencePaths(input.root);
 	const allowed = new Set(paths);
 	let calls = 0;
 	let remaining = 128 * 1024;
@@ -57,7 +57,7 @@ export async function runWorker(input: WorkerRequest): Promise<unknown> {
 	if (!getSupportedThinkingLevels(model).includes(input.thinking as never)) throw new Error("Reviewer thinking level is unsupported for this model. Reset thinking in /idle-learn config.");
 	const auth = await runtime.getAuth(model, { signal: AbortSignal.timeout(20_000) });
 	if (!auth) throw new Error("Reviewer credentials unavailable. Use /login for the selected provider.");
-	const options = reviewerSessionOptions(input.root, input.systemPrompt, model, runtime, input.purpose === "calibration" ? [] : [list, read]);
+	const options = reviewerSessionOptions(input.root, input.systemPrompt, model, runtime, input.purpose ? [] : [list, read]);
 	options.thinkingLevel = input.thinking as NonNullable<typeof options.thinkingLevel>;
 	const { session } = await createAgentSession(options);
 	let turns = 0;
