@@ -1,5 +1,11 @@
 # @mblarsen/pi-idle-learn
 
+## 0.3.1
+
+### Patch Changes
+
+- af980dd: Show more suggestions in the review list by using the available panel height instead of limiting the list to eight items. Keep the current selection when the terminal is resized.
+
 ## 0.3.0
 
 ### Minor Changes
