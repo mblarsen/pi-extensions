@@ -30,6 +30,7 @@ export class ReviewPanel implements Component {
 	private done: (action: ReviewAction) => void;
 	private keys?: (data: string, action: "confirm" | "cancel") => boolean;
 	private list!: SelectList;
+	private listRows = 1;
 	private selection: Set<string>;
 	private batches: { open: number; applying: number };
 
@@ -44,7 +45,7 @@ export class ReviewPanel implements Component {
 		this.buildList();
 	}
 	private buildList(): void {
-		this.list = new SelectList(this.suggestions.map((item) => ({ value: item.id, label: `${item.kind === "calibration" ? "[Calibration] " : this.selection.has(item.id) ? "● " : "○ "}${inline(item.title)}` })), 8, {
+		this.list = new SelectList(this.suggestions.map((item) => ({ value: item.id, label: `${item.kind === "calibration" ? "[Calibration] " : this.selection.has(item.id) ? "● " : "○ "}${inline(item.title)}` })), this.listRows, {
 			selectedPrefix: (text) => this.color("accent", text), selectedText: (text) => this.color("accent", text),
 			description: (text) => this.color("muted", text), scrollInfo: (text) => this.color("dim", text), noMatch: (text) => text,
 		});
@@ -136,6 +137,12 @@ export class ReviewPanel implements Component {
 		}
 		const rows = Math.max(3, Math.min(28, this.height() - 9));
 		this.page = rows;
+		// Reserve a row for SelectList's scroll indicator, a gap, and the position count.
+		const listRows = Math.max(1, rows - 3);
+		if (listRows !== this.listRows) {
+			this.listRows = listRows;
+			this.buildList();
+		}
 		const leftWidth = Math.min(40, Math.floor(width * 0.32));
 		const detailWidth = this.wide ? width - leftWidth - 1 : width;
 		const detailLines = this.details(detailWidth - 4);

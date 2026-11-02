@@ -28,6 +28,32 @@ test("review renders within bounds at 80x24, 120x40, and 200x60", () => {
 	}
 });
 
+test("suggestion list fills its panel and preserves selection across resize", () => {
+	const items = Array.from({ length: 65 }, (_, index) => ({ ...suggestion, id: `item-${index}`, title: `Lesson ${index + 1}` }));
+	let height = 40;
+	const panel = new ReviewPanel(items, "Ready", theme, () => height, () => {}, undefined, items[18].id);
+	const check = (width: number, expected: number) => {
+		const lines = panel.render(width).map(stripVTControlCharacters);
+		const list = lines.map((line) => line.split("│")[1] ?? "");
+		assert.equal(list.filter((line) => /Lesson \d+/.test(line)).length, expected);
+		assert.ok(list.some((line) => /→.*Lesson 19\b/.test(line)));
+		assert.match(lines.join("\n"), /19 of 65/);
+		assert.ok(lines.length <= height);
+		assert.ok(lines.every((line) => visibleWidth(line) <= width));
+	};
+	check(120, 25);
+	panel.handleInput(" ");
+	check(120, 25);
+	height = 24;
+	check(80, 12);
+	height = 60;
+	check(120, 25);
+	for (let i = 19; i < 65; i++) panel.handleInput("j");
+	assert.match(panel.render(120).join("\n"), /→.*Lesson 65\b/);
+	panel.handleInput("j");
+	assert.match(panel.render(120).join("\n"), /→.*Lesson 1\b/);
+});
+
 test("narrow review requires opening details before reject; calibration alone keeps apply", () => {
 	const actions: ReviewAction[] = [];
 	const panel = new ReviewPanel([suggestion], "Ready", theme, () => 24, (action) => actions.push(action));
