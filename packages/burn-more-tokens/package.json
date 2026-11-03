@@ -1,6 +1,6 @@
 {
   "name": "@mblarsen/pi-burn-more-tokens",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Announce successful Pi runs through AWTRIX and macOS speech.",
   "license": "MIT",
   "type": "module",

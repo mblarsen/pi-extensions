@@ -1,6 +1,6 @@
 {
   "name": "@mblarsen/pi-follow-ups",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Capture follow-up notes anchored to Pi assistant messages.",
   "license": "MIT",
   "type": "module",

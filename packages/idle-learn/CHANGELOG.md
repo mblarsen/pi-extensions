@@ -1,5 +1,11 @@
 # @mblarsen/pi-idle-learn
 
+## 0.3.2
+
+### Patch Changes
+
+- 134fcef: Include release notes in the package so Pi can show changes under Extension Updates after an update.
+
 ## 0.3.1
 
 ### Patch Changes
