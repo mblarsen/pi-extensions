@@ -1,6 +1,6 @@
 {
   "name": "@mblarsen/pi-continue-from",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Resume or nudge a stalled Pi conversation.",
   "license": "MIT",
   "type": "module",

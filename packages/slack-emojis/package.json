@@ -1,6 +1,6 @@
 {
   "name": "@mblarsen/pi-slack-emojis",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Convert Slack and GitHub emoji shortcodes in Pi.",
   "license": "MIT",
   "type": "module",
