@@ -11,7 +11,8 @@
   "files": [
     "index.ts",
     "core.ts",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "repository": {
     "type": "git",

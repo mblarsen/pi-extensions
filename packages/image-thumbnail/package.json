@@ -6,7 +6,7 @@
   "type": "module",
   "author": "Michael Bøcker-Larsen",
   "keywords": ["pi-package", "pi-extension"],
-  "files": ["index.ts", "core.ts", "thumbnail.ts", "README.md"],
+  "files": ["index.ts", "core.ts", "thumbnail.ts", "README.md", "CHANGELOG.md"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mblarsen/pi-extensions.git",

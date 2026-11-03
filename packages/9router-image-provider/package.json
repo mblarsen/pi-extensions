@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "keywords": ["pi-package", "pi-extension"],
-  "files": ["index.ts", "provider.ts", "README.md"],
+  "files": ["index.ts", "provider.ts", "README.md", "CHANGELOG.md"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mblarsen/pi-extensions.git",
