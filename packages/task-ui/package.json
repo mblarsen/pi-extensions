@@ -13,6 +13,7 @@
     "core.ts",
     "markdown.ts",
     "README.md",
+    "CHANGELOG.md",
     "assets",
     "skills"
   ],

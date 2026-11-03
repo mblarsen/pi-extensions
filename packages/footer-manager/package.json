@@ -11,6 +11,7 @@
   "files": [
     "index.ts",
     "README.md",
+    "CHANGELOG.md",
     "demo.gif"
   ],
   "repository": {

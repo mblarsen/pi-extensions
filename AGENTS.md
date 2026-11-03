@@ -41,6 +41,22 @@ npx changeset status
 
 Make sure `npm run pack:check` includes each declared Pi extension and Agent Skill. It must exclude tests.
 
+## Extension update changelogs
+
+For package changes, use the Changesets workflow above to generate release notes for Pi's "Extension Updates" section.
+
+- Keep each extension package's generated `CHANGELOG.md` at its package root.
+- Include `CHANGELOG.md` in the package's `files` list, including for new packages before their first release.
+- Use Pi-compatible version headings, such as `## 1.2.0` or `## [1.2.0]`. Changesets already generates compatible headings.
+- During version PR review, verify that the newest changelog heading matches the package's `version` field.
+- Verify that `npm run pack:check` includes each released extension package's changelog in its tarball.
+- Use the default changelog location. Set `pi.changelogPath` only for an intentional alternative inside the package, and include that file in the tarball.
+- Set `pi.changelogPath` to `""` only when explicitly asked to disable update notes.
+
+Pi shows new entries on the next fresh launch after an update, not on the first installation. The package version must increase, including for git installs. Only packages that load at least one extension qualify. `/changelog` does not show package changelogs.
+
+Reference: [Pi package changelogs](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/docs/packages.md#show-a-changelog).
+
 ## Release requests
 
 Interpret release requests as follows:

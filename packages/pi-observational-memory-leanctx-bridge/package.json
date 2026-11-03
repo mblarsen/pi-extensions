@@ -13,7 +13,8 @@
     "core.ts",
     "archived-recall.ts",
     "evidence-store.ts",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "repository": {
     "type": "git",
