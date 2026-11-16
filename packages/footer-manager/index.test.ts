@@ -48,7 +48,7 @@ test("manager keeps discovered keys in holding across reloads until placed or hi
 				renderManager = (width) => manager.render(width);
 			},
 		},
-		sessionManager: { getCwd: () => "/test", getSessionName: () => "", getEntries: () => [] },
+		sessionManager: { getCwd: () => "/test", getSessionId: () => "session", getLeafId: () => null, getSessionName: () => "", getEntries: () => [] },
 		getContextUsage: () => undefined,
 	} as unknown as ExtensionCommandContext;
 	assert.ok(command);
@@ -104,6 +104,128 @@ test("manager keeps discovered keys in holding across reloads until placed or hi
 	await writeFile(settingsPath, "invalid json");
 	await assert.rejects(command.handler("status-line on", ctx));
 	assert.equal(await readFile(settingsPath, "utf8"), "invalid json");
+});
+
+test("repaints reuse session stats while live footer data and branch revisions stay fresh", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "footer-cache-"));
+	const previousHome = process.env.HOME;
+	process.env.HOME = home;
+	t.after(async () => {
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+		await rm(home, { recursive: true, force: true });
+	});
+	const events = new Map<string, Function>();
+	let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+	footerManager({
+		registerCommand(_name, options) { command = options; },
+		on(name, handler) { events.set(name, handler); },
+	} satisfies Pick<ExtensionAPI, "registerCommand" | "on"> as unknown as ExtensionAPI);
+	let footer: { render(width: number): string[]; invalidate(): void; dispose(): void };
+	let manager: { render(width: number): string[] };
+	let onGitBranchChange = () => {};
+	let gitBranch = "main";
+	let leafId: string | null = null;
+	let sessionId = "session-1";
+	let sessionName = "First session";
+	let percent: number | null = 10;
+	let subscription = false;
+	let scans = 0;
+	let contextReads = 0;
+	let nameReads = 0;
+	const entries: Parameters<typeof formatBuiltinStats>[0][number][] = [];
+	const statuses = new Map<string, string>();
+	const tui = { requestRender() {} };
+	const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+	const model = { id: "test-model", provider: "test-provider", contextWindow: 100_000 };
+	const ctx = {
+		ui: {
+			notify() {},
+			setFooter(factory: Function | undefined) {
+				if (factory) footer = factory(tui, theme, {
+					getGitBranch: () => gitBranch,
+					getExtensionStatuses: () => statuses,
+					getAvailableProviderCount: () => 1,
+					onBranchChange(callback: () => void) { onGitBranchChange = callback; return () => {}; },
+				});
+			},
+			async custom(factory: Function) { manager = factory(tui, theme, {}, () => {}); },
+		},
+		sessionManager: {
+			getCwd: () => "/test",
+			getSessionId: () => sessionId,
+			getLeafId: () => leafId,
+			getSessionName: () => { nameReads++; return sessionName; },
+			getEntries: () => { scans++; return entries; },
+		},
+		model,
+		modelRegistry: {
+			isUsingOAuth: () => subscription,
+			getProvider: () => ({ auth: { oauth: { isSubscription: true } } }),
+		},
+		getContextUsage: () => { contextReads++; return { contextWindow: model.contextWindow, percent }; },
+	} as unknown as ExtensionCommandContext;
+	const render = () => footer.render(200).join("\n");
+	const assertReads = (expected: number) => assert.deepEqual({ scans, contextReads, nameReads }, {
+		scans: expected, contextReads: expected, nameReads: expected,
+	});
+	await events.get("session_start")!({}, ctx);
+	assert.match(render(), /10.0%\/100k/);
+	for (let i = 0; i < 100; i++) {
+		footer!.invalidate();
+		footer!.render(80 + i);
+	}
+	assertReads(1);
+
+	gitBranch = "fix/footer";
+	onGitBranchChange();
+	assert.match(render(), /fix\/footer/);
+	statuses.set("live", "Live status");
+	await command!.handler("ext live", ctx);
+	await command!.handler("ext live", ctx);
+	statuses.set("live", "Changed status");
+	assert.match(render(), /Changed status/);
+	await command!.handler("", ctx);
+	manager!.render(160);
+	assertReads(1);
+
+	entries.push({ type: "usage", usage: usage({ input: 100, cost: { total: 0.1 } }) });
+	leafId = "usage-1";
+	percent = 20;
+	assert.match(render(), /↑100.*\$0.100.*20.0%/);
+	assertReads(2);
+	// Renames and compaction append entries, even when no new assistant message exists.
+	leafId = "compaction-1";
+	sessionName = "Renamed session";
+	percent = null;
+	assert.match(render(), /Renamed session/);
+	assert.match(render(), /\?\/100k/);
+	assertReads(3);
+
+	model.id = "other-model";
+	model.provider = "other-provider";
+	model.contextWindow = 200_000;
+	percent = 5;
+	assert.match(render(), /\(other-provider\) other-model/);
+	assert.match(render(), /5.0%\/200k/);
+	assertReads(4);
+	subscription = true;
+	assert.match(render(), /\$0.100 \(sub\)/);
+	assertReads(5);
+
+	// Session identity must distinguish identical leaf ids after a switch.
+	sessionId = "session-2";
+	sessionName = "Second session";
+	assert.match(render(), /Second session/);
+	assertReads(6);
+	await events.get("session_tree")!({}, ctx);
+	render();
+	assertReads(7);
+	footer!.dispose();
+	await events.get("session_start")!({}, ctx);
+	render();
+	assertReads(8);
+	await events.get("session_shutdown")!({}, ctx);
 });
 
 function usage(values: Partial<Omit<Usage, "cost">> & { cost?: Partial<Usage["cost"]> }): Usage {

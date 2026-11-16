@@ -141,6 +141,12 @@ export default function (pi: ExtensionAPI) {
 	let state: FooterManagerState = { ...DEFAULT_STATE, order: [...DEFAULT_ORDER], layout: cloneLayout(DEFAULT_LAYOUT), unplaced: [] };
 	let footerDataRef: FooterDataRef | undefined;
 	let footerApplied = false;
+	let sessionSnapshotCache: {
+		manager: ExtensionContext["sessionManager"];
+		revision: string;
+		sessionName: string;
+		stats: string;
+	} | undefined;
 	let requestFooterRender: (() => void) | undefined;
 	let pendingSave: Promise<void> = Promise.resolve();
 	let reportSaveError = (error: unknown) => console.error("footer-manager could not save discovered keys:", error);
@@ -438,7 +444,6 @@ export default function (pi: ExtensionAPI) {
 		let cwd = formatCwd(ctx.sessionManager.getCwd());
 		const branch = footerData.getGitBranch();
 		if (branch) cwd += ` (${branch})`;
-		const sessionName = ctx.sessionManager.getSessionName() ?? "";
 		const modelId = ctx.model?.id || "no-model";
 		const providerPrefix = ctx.model ? `(${ctx.model.provider}) ` : "";
 		const usingSubscription = ctx.model
@@ -447,15 +452,32 @@ export default function (pi: ExtensionAPI) {
 				ctx.modelRegistry.getProvider(ctx.model.provider)?.auth.oauth?.isSubscription === true
 			)
 			: false;
+		// These getters can scan or project the entire session. A repaint is not a session change.
+		const revision = JSON.stringify([
+			ctx.sessionManager.getSessionId(),
+			ctx.sessionManager.getLeafId(),
+			ctx.model?.provider,
+			ctx.model?.id,
+			ctx.model?.contextWindow,
+			usingSubscription,
+		]);
+		if (!sessionSnapshotCache || sessionSnapshotCache.manager !== ctx.sessionManager || sessionSnapshotCache.revision !== revision) {
+			sessionSnapshotCache = {
+				manager: ctx.sessionManager,
+				revision,
+				sessionName: ctx.sessionManager.getSessionName() ?? "",
+				stats: formatBuiltinStats(
+					ctx.sessionManager.getEntries() as UsageEntryLike[],
+					ctx.getContextUsage(),
+					ctx.model?.contextWindow ?? 0,
+					usingSubscription,
+				),
+			};
+		}
 		return {
 			cwd,
-			sessionName,
-			stats: formatBuiltinStats(
-				ctx.sessionManager.getEntries() as UsageEntryLike[],
-				ctx.getContextUsage(),
-				ctx.model?.contextWindow ?? 0,
-				usingSubscription,
-			),
+			sessionName: sessionSnapshotCache.sessionName,
+			stats: sessionSnapshotCache.stats,
 			model: `${providerPrefix}${modelId}`,
 		};
 	}
@@ -497,6 +519,7 @@ export default function (pi: ExtensionAPI) {
 			return {
 				dispose() {
 					unsubscribe();
+					sessionSnapshotCache = undefined;
 					footerApplied = false;
 					requestFooterRender = undefined;
 				},
@@ -977,6 +1000,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		sessionSnapshotCache = undefined;
 		footerDataRef = undefined;
 		footerApplied = false;
 		requestFooterRender = undefined;
@@ -985,12 +1009,14 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
+		sessionSnapshotCache = undefined;
 		await loadState();
 		applyFooter(ctx);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		await pendingSave;
+		sessionSnapshotCache = undefined;
 		footerDataRef = undefined;
 		footerApplied = false;
 		requestFooterRender = undefined;
