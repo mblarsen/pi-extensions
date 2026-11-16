@@ -1,6 +1,6 @@
 {
   "name": "@mblarsen/pi-footer-manager",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Toggle, reorder, and simplify the Pi status footer.",
   "license": "MIT",
   "type": "module",
