@@ -411,6 +411,50 @@ test("cycles sidebar → browse → off and supports named view commands", async
 	await lifecycle.get("session_shutdown")!({} as never, ctx as never);
 });
 
+test("shutdown releases local UI state without calling the host overlay bridge", async (t) => {
+	t.mock.timers.enable({ apis: ["setInterval"] });
+	const { pi, tools } = extensionHarness();
+	const lifecycle = new Map<string, (event: never, ctx: never) => Promise<void>>();
+	pi.on = ((event: string, handler: (event: never, ctx: never) => Promise<void>) => lifecycle.set(event, handler)) as never;
+	pi.appendEntry = () => {};
+	taskUiExtension(pi);
+	let renders = 0;
+	let shuttingDown = false;
+	let overlayCreated = false;
+	const hostCall = () => {
+		assert.equal(shuttingDown, false, "must not call the host UI bridge during shutdown");
+	};
+	const ctx = {
+		mode: "tui",
+		sessionManager: { getBranch: () => [] },
+		ui: {
+			custom(factory: (...args: never[]) => unknown, options: { onHandle: (handle: unknown) => void }) {
+				overlayCreated = true;
+				factory({ requestRender() { hostCall(); renders += 1; }, terminal: { rows: 40 } } as never, {} as never);
+				options.onHandle({ hide: hostCall, setHidden: hostCall });
+				// The host owns the overlay promise and disposes it on exit.
+				return new Promise<void>(() => {});
+			},
+		},
+	};
+	await lifecycle.get("session_start")!({} as never, ctx as never);
+	assert.equal(overlayCreated, true);
+	await tools.find((tool) => tool.name === "task_ui_create")!.execute("create", {
+		subject: "Running task", executing: true,
+	});
+	const beforeTick = renders;
+	t.mock.timers.tick(500);
+	assert.ok(renders > beforeTick, "executing tasks animate before shutdown");
+	shuttingDown = true;
+	await lifecycle.get("session_shutdown")!({} as never, ctx as never);
+	const afterShutdown = renders;
+	t.mock.timers.tick(1000);
+	assert.equal(renders, afterShutdown, "shutdown stops the animation timer");
+	await tools.find((tool) => tool.name === "task_ui_clear")!.execute("clear", {});
+	assert.equal(renders, afterShutdown, "shutdown clears stale render callbacks");
+	await lifecycle.get("session_shutdown")!({} as never, ctx as never);
+});
+
 test("classifies only successful checkpoint tool results", () => {
 	const checkpoint = (toolName: string, input: unknown, isError = false) =>
 		checkpointForToolResult({ toolName, input, isError });

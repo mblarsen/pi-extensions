@@ -1659,7 +1659,7 @@ export default function taskUiExtension(pi: ExtensionAPI): void {
 		checkpointReminderQueued = false;
 		currentCtx = undefined;
 		stopAnimation();
-		overlayHandle?.hide();
+		// The host disposes overlays on exit; UI bridge calls here can deadlock Pig shutdown.
 		overlayHandle = undefined;
 		requestRender = undefined;
 		browseRequestRender = undefined;
