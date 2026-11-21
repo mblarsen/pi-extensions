@@ -1,5 +1,11 @@
 # @mblarsen/pi-task-ui
 
+## 2.4.2
+
+### Patch Changes
+
+- 8e169d9: Fix Pig hanging on exit when the task sidebar is enabled.
+
 ## 2.4.1
 
 ### Patch Changes
